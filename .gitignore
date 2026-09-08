@@ -1,0 +1,4 @@
+.xmake/
+.xmake-global/
+build/
+lib/commonlibsse-ng/
