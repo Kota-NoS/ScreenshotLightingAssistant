@@ -8,7 +8,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
 {
     namespace
     {
-        struct Runtime final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
+        struct Runtime final : RE::BSTEventSink<RE::MenuOpenCloseEvent>, RE::BSTEventSink<RE::InputEvent*>
         {
             std::mutex mutex;
             LightSession session;
@@ -17,6 +17,18 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             std::atomic_bool queued = false;
             std::atomic_bool dirty = false;
             std::atomic_bool ownsLight = false; // true if ANY owned point exists
+            std::atomic_bool persistentFaceActive = false;
+            std::atomic_bool persistentFaceWaiting = false;
+            std::atomic_bool persistentFaceUsesPhotoLight = false;
+            std::atomic<std::uint64_t> persistentSaveRevision = 0;
+            PersistentFaceSettings persistentFace;
+            std::filesystem::path persistentFacePath;
+            std::string persistentFaceError;
+            std::string persistentHotkeyName = "未設定";
+            std::string persistentGamepadHotkeyName = "未設定";
+            bool persistentHotkeyCapture = false;
+            bool persistentGamepadCapture = false;
+            PersistentGamepadHoldGate persistentGamepadHold;
             struct TargetCommand {
                 std::uint64_t epoch;
                 TargetAction action;
@@ -68,12 +80,31 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 result.session = session.Get();
                 result.status = status;
                 result.statusImportant = statusImportant;
+                result.persistentFace = persistentFace;
+                result.persistentFaceActive = persistentFaceActive.load();
+                result.persistentFaceWaiting = persistentFaceWaiting.load();
+                result.persistentFaceUsesPhotoLight = persistentFaceUsesPhotoLight.load();
+                result.persistentHotkeyCapture = persistentHotkeyCapture;
+                result.persistentHotkeyName = persistentHotkeyName;
+                result.persistentGamepadCapture = persistentGamepadCapture;
+                result.persistentGamepadHotkeyName = persistentGamepadHotkeyName;
+                result.persistentFaceError = persistentFaceError;
                 return result;
             }
             LightSessionSnapshot Request()
             {
                 std::scoped_lock lock(mutex);
                 return session.Get();
+            }
+            PersistentFaceSettings PersistentRequest()
+            {
+                std::scoped_lock lock(mutex);
+                return persistentFace;
+            }
+            bool PersistentRequested()
+            {
+                std::scoped_lock lock(mutex);
+                return persistentFace.featureEnabled && persistentFace.enabled;
             }
             bool Current(std::uint64_t epoch)
             {
@@ -94,6 +125,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 Clear();
                 basis.reset();
                 cellID = 0;
+                dirty.store(true); // an armed persistent face light retries on the next safe task
                 logger::info("Lighting session suspended: {}", message);
             }
             void ClearSlot(std::size_t slot)
@@ -119,6 +151,68 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             {
                 for (std::size_t slot = 0; slot < lights.size(); ++slot) { ClearSlot(slot); }
                 scene.reset();
+                persistentFaceActive.store(false);
+                persistentFaceWaiting.store(false);
+                persistentFaceUsesPhotoLight.store(false);
+            }
+
+            void SetPersistentState(bool active, bool waiting, bool usesPhotoLight)
+            {
+                persistentFaceActive.store(active);
+                persistentFaceWaiting.store(waiting);
+                persistentFaceUsesPhotoLight.store(usesPhotoLight);
+            }
+
+            std::string ResolveHotkeyName(RE::INPUT_DEVICE device, std::uint32_t code)
+            {
+                if (code == kNoPersistentFaceHotkey) { return "未設定"; }
+                RE::BSFixedString name;
+                if (auto* input = RE::BSInputDeviceManager::GetSingleton();
+                    input && input->GetButtonNameFromID(device,
+                        static_cast<std::int32_t>(code), name) && !name.empty()) {
+                    return name.c_str();
+                }
+                if (device == RE::INPUT_DEVICE::kGamepad) {
+                    switch (code) {
+                    case 0x0001: return "D-pad Up";
+                    case 0x0002: return "D-pad Down";
+                    case 0x0004: return "D-pad Left";
+                    case 0x0008: return "D-pad Right";
+                    case 0x0010: return "Start";
+                    case 0x0020: return "Back";
+                    case 0x0040: return "L3";
+                    case 0x0080: return "R3";
+                    case 0x0100: return "LB";
+                    case 0x0200: return "RB";
+                    case 0x0009: return "LT";
+                    case 0x000A: return "RT";
+                    case 0x1000: return "A / Cross";
+                    case 0x2000: return "B / Circle";
+                    case 0x4000: return "X / Square";
+                    case 0x8000: return "Y / Triangle";
+                    default: break;
+                    }
+                    return std::format("Gamepad 0x{:04X}", code);
+                }
+                return std::format("Keyboard 0x{:02X}", code);
+            }
+
+            void SavePersistentConfiguration()
+            {
+                PersistentFaceSettings settings;
+                std::filesystem::path path;
+                {
+                    std::scoped_lock lock(mutex);
+                    settings = persistentFace;
+                    path = persistentFacePath;
+                }
+                std::string error;
+                const bool saved = SavePersistentFaceSettings(path, settings, error);
+                {
+                    std::scoped_lock lock(mutex);
+                    persistentFaceError = std::move(error);
+                }
+                if (!saved) { logger::warn("Persistent face-light preference was not saved"); }
             }
 
             static LightVector Vec(const RE::NiPoint3& p) { return { p.x, p.y, p.z }; }
@@ -277,6 +371,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 dirty.exchange(false);
                 ProcessTargetCommand();
                 const auto request = Request();
+                const auto persistent = PersistentRequest();
+                const bool persistentRequested = persistent.featureEnabled && persistent.enabled;
                 if (request.epoch != appliedEpoch) {
                     Clear();
                     basis.reset();
@@ -284,66 +380,94 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     playerCellID = 0;
                     appliedEpoch = request.epoch;
                 }
-                if (!request.ready || request.blocked || !request.running) {
+                if (!request.ready || request.blocked) {
                     Clear();
-                    if (request.ready && !request.blocked) {
-                        std::scoped_lock lock(mutex);
-                        if (session.Get().epoch == request.epoch && status == "停止処理待ち : 設定・履歴は保持されています。") {
-                            status = "停止しました。ライト設定・履歴は保持されています。";
-                        }
-                    }
+                    SetPersistentState(false, persistentRequested, false);
                     return;
                 }
                 if (!Current(request.epoch)) { Clear(); return; }
                 auto* ui = RE::UI::GetSingleton();
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 if (!ui || ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) {
-                    Halt(request.epoch, "画面遷移で停止しました。撮影場所で開始してください。");
+                    if (request.running) { Halt(request.epoch, "画面遷移で停止しました。撮影場所で開始してください。"); }
+                    else { Clear(); }
+                    SetPersistentState(false, persistentRequested, false);
                     return;
                 }
-                bool npc;
-                { std::scoped_lock lock(mutex); npc = targetView.npcTarget; }
-                RE::NiPointer<RE::Actor> actor = npc ? targetHandle.get() : RE::NiPointer<RE::Actor>{player};
-                if (!Eligible(actor.get(), player)) {
-                    Halt(request.epoch, "撮影対象を読み込めないため停止しました。対象を選び直してください。");
-                    return;
-                }
-                auto* cell = actor->GetParentCell();
-                auto* playerCell = player->GetParentCell();
-                if (playerCellID && playerCellID != playerCell->GetFormID()) {
-                    Halt(request.epoch, "場所の移動で停止しました。必要な場所で再開してください。");
-                    return;
-                }
-                playerCellID = playerCell->GetFormID();
-                RE::NiPointer<RE::NiAVObject> root{ actor->Get3D(false) };
-                auto* camera = RE::PlayerCamera::GetSingleton();
-                RE::NiPointer<RE::NiNode> cameraRoot = camera ? camera->cameraRoot : nullptr;
                 auto* currentScene = RE::BSShaderManager::State::GetSingleton().shadowSceneNode[0];
-                if (!cell || !cell->IsAttached() || !root || !cameraRoot || !currentScene) {
-                    Halt(request.epoch, "対象・カメラを取得できません。ロード完了後、三人称かフリーカメラで開始してください。");
+                if (!player || !currentScene || !Eligible(player, player)) {
+                    if (request.running) { Halt(request.epoch, "対象・カメラを取得できません。ロード完了後、三人称かフリーカメラで開始してください。"); }
+                    else { Clear(); }
+                    SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
                     return;
                 }
-                if ((cellID && cellID != cell->GetFormID()) || (scene && scene.get() != currentScene)) {
-                    Halt(request.epoch, "場所の移動で停止しました。必要な場所で再開してください。");
+                auto* playerCell = player->GetParentCell();
+                if (!playerCell || !playerCell->IsAttached()) {
+                    if (request.running) { Halt(request.epoch, "場所の移動で停止しました。必要な場所で再開してください。"); }
+                    else { Clear(); }
+                    SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
                     return;
                 }
-                cellID = cell->GetFormID();
-                const auto anchor = Anchor(actor.get(), root.get());
-                const auto cameraPosition = Vec(cameraRoot->world.translate);
-                if (!basis || appliedAlignment != request.alignment) {
-                    basis = MakeCameraBasis(anchor, cameraPosition);
-                    appliedAlignment = request.alignment;
-                    if (!basis) {
-                        Halt(request.epoch, "正面を判定できません。カメラを対象から少し離して開始してください。");
+                const bool rendererChanged = scene && scene.get() != currentScene;
+                const bool playerCellChanged = playerCellID && playerCellID != playerCell->GetFormID();
+                if (rendererChanged || playerCellChanged) {
+                    if (request.running) {
+                        Halt(request.epoch, "場所の移動で停止しました。必要な場所で再開してください。");
+                        SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
                         return;
                     }
-                    logger::info("Captured camera basis; anchor={}, cell={:08X}",
-                        positionFallback ? "position+1.2m" : headFallback ? "head" : "chest", cellID);
+                    Clear();
+                    basis.reset();
+                    cellID = 0;
+                }
+                playerCellID = playerCell->GetFormID();
+
+                bool npc;
+                { std::scoped_lock lock(mutex); npc = targetView.npcTarget; }
+                RE::NiPointer<RE::Actor> actor = request.running ?
+                    (npc ? targetHandle.get() : RE::NiPointer<RE::Actor>{player}) : RE::NiPointer<RE::Actor>{};
+                if (request.running && !Eligible(actor.get(), player)) {
+                    Halt(request.epoch, "撮影対象を読み込めないため停止しました。対象を選び直してください。");
+                    SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
+                    return;
+                }
+                auto* cell = actor ? actor->GetParentCell() : nullptr;
+                RE::NiPointer<RE::NiAVObject> root;
+                if (actor) { root.reset(actor->Get3D(false)); }
+                RE::NiPointer<RE::NiAVObject> playerRoot{player->Get3D(false)};
+                auto* camera = RE::PlayerCamera::GetSingleton();
+                RE::NiPointer<RE::NiNode> cameraRoot = camera ? camera->cameraRoot : nullptr;
+                if (request.running && (!cell || !cell->IsAttached() || !root || !cameraRoot)) {
+                    Halt(request.epoch, "対象・カメラを取得できません。ロード完了後、三人称かフリーカメラで開始してください。");
+                    SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
+                    return;
+                }
+                if (request.running && cellID && cellID != cell->GetFormID()) {
+                    Halt(request.epoch, "場所の移動で停止しました。必要な場所で再開してください。");
+                    SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
+                    return;
+                }
+                if (request.running) { cellID = cell->GetFormID(); }
+                const auto cameraPosition = cameraRoot ? std::optional{Vec(cameraRoot->world.translate)} : std::nullopt;
+                LightVector anchor{};
+                if (request.running) {
+                    anchor = Anchor(actor.get(), root.get());
+                    if (!basis || appliedAlignment != request.alignment) {
+                        basis = cameraPosition ? MakeCameraBasis(anchor, *cameraPosition) : std::nullopt;
+                        appliedAlignment = request.alignment;
+                        if (!basis) {
+                            Halt(request.epoch, "正面を判定できません。カメラを対象から少し離して開始してください。");
+                            SetPersistentState(false, persistentRequested && persistent.intensity > 0.0F, false);
+                            return;
+                        }
+                        logger::info("Captured camera basis; anchor={}, cell={:08X}",
+                            positionFallback ? "position+1.2m" : headFallback ? "head" : "chest", cellID);
+                    }
                 }
                 // Hold the scene even with all slots OFF; scene replacement must still disarm.
                 if (!scene) { scene.reset(currentScene); }
                 std::optional<LightVector> facePosition;
-                if (LightSession::ShouldIlluminateFace(request)) {
+                if (request.running && LightSession::ShouldIlluminateFace(request)) {
                     if (auto* head = root->GetObjectByName(RE::BSFixedString("NPC Head [Head]"))) {
                         const auto& face = request.lights.face;
                         if (face.basis == FaceLightBasis::Head) {
@@ -352,18 +476,48 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                             facePosition = HeadFaceLightPosition(Vec(head->world.translate),
                                 Vec(head->world.rotate * RE::NiPoint3{0, 1, 0}),
                                 Vec(head->world.rotate * RE::NiPoint3{0, 0, 1}), face.heightOffset);
-                        } else {
-                            facePosition = FaceLightPosition(Vec(head->world.translate), cameraPosition, face.heightOffset);
+                        } else if (cameraPosition) {
+                            facePosition = FaceLightPosition(Vec(head->world.translate), *cameraPosition, face.heightOffset);
                         }
                     }
                 }
+
+                const bool photoFaceOwnsPlayer = persistentRequested && request.running && !npc &&
+                    LightSession::ShouldIlluminateFace(request);
+                std::optional<LightVector> persistentFacePosition;
+                if (persistentRequested && persistent.intensity > 0.0F && !photoFaceOwnsPlayer && playerRoot) {
+                    if (auto* head = playerRoot->GetObjectByName(RE::BSFixedString("NPC Head [Head]"))) {
+                        persistentFacePosition = HeadFaceLightPosition(Vec(head->world.translate),
+                            Vec(head->world.rotate * RE::NiPoint3{0, 1, 0}),
+                            Vec(head->world.rotate * RE::NiPoint3{0, 0, 1}), persistent.heightOffset);
+                    }
+                }
+
+                const auto settingsFor = [&](std::size_t slot) -> std::optional<LightSettings> {
+                    if (slot != kPersistentFaceRuntimeSlot) { return RuntimeSettings(request.lights, slot); }
+                    LightSettings light;
+                    light.placed = true;
+                    light.enabled = persistentRequested;
+                    light.intensity = persistent.intensity;
+                    light.range = persistent.range;
+                    light.castsShadow = false;
+                    light.shadowProjection = ShadowProjection::Omni;
+                    return light;
+                };
+                const auto wantsSlot = [&](std::size_t slot) {
+                    if (slot == kPersistentFaceRuntimeSlot) {
+                        return persistentRequested && persistent.intensity > 0.0F && !photoFaceOwnsPlayer &&
+                            persistentFacePosition.has_value();
+                    }
+                    return request.running && LightSession::ShouldIlluminateRuntime(request, slot) &&
+                        (slot != kFaceRuntimeSlot || facePosition.has_value());
+                };
                 // Retire removed/retyped-shadow registrations first, across the whole scene.
                 // A 3 -> 2 light preset cannot retain the third light while creating replacements.
                 for (std::size_t slot = 0; slot < lights.size(); ++slot) {
                     const auto& owned = lights[slot];
-                    const auto settings = RuntimeSettings(request.lights, slot);
-                    if (!settings || !LightSession::ShouldIlluminateRuntime(request, slot) ||
-                        (slot == kFaceRuntimeSlot && !facePosition) ||
+                    const auto settings = settingsFor(slot);
+                    if (!settings || !wantsSlot(slot) ||
                         (owned.registration && owned.registeredSettings != LightRegistrationSettings::From(*settings))) {
                         ClearSlot(slot);
                     }
@@ -371,18 +525,23 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 std::size_t active = 0, shadowed = 0;
                 for (std::size_t slot = 0; slot < lights.size(); ++slot) {
                     if (!Current(request.epoch)) { Clear(); return; }
-                    if (!LightSession::ShouldIlluminateRuntime(request, slot) || (slot == kFaceRuntimeSlot && !facePosition)) {
-                        continue;
+                    if (!wantsSlot(slot)) { continue; }
+                    const auto settings = settingsFor(slot);
+                    if (!settings) {
+                        if (request.running) { Halt(request.epoch, "光源設定が無効なため停止しました。"); }
+                        return;
                     }
-                    const auto settings = RuntimeSettings(request.lights, slot);
-                    if (!settings) { Halt(request.epoch, "光源設定が無効なため停止しました。"); return; }
                     const auto& light = *settings;
                     const auto tint = RuntimeTint(light);
-                    if (!tint) { Halt(request.epoch, "光源の色設定が無効なため全灯を停止しました。"); return; }
+                    if (!tint) {
+                        if (request.running) { Halt(request.epoch, "光源の色設定が無効なため全灯を停止しました。"); }
+                        return;
+                    }
                     auto& owned = lights[slot];
-                    const auto position = slot == kFaceRuntimeSlot ? facePosition : LightPosition(anchor, *basis, light);
+                    const auto position = slot == kPersistentFaceRuntimeSlot ? persistentFacePosition :
+                        slot == kFaceRuntimeSlot ? facePosition : LightPosition(anchor, *basis, light);
                     if (!position) {
-                        Halt(request.epoch, "配置座標が無効なため停止しました。");
+                        if (request.running) { Halt(request.epoch, "配置座標が無効なため停止しました。"); }
                         return;
                     }
                     if (!Current(request.epoch)) { Clear(); return; }
@@ -394,8 +553,12 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     }
                     if (!owned.point) {
                         owned.point.reset(RE::NiPointLight::Create());
-                        if (!owned.point) { Halt(request.epoch, "光源を作成できませんでした。"); return; }
+                        if (!owned.point) {
+                            if (request.running) { Halt(request.epoch, "光源を作成できませんでした。"); }
+                            return;
+                        }
                         owned.point->name = RE::BSFixedString(slot == kFaceRuntimeSlot ? "ScreenshotLightingAssistant:Face" :
+                            slot == kPersistentFaceRuntimeSlot ? "ScreenshotLightingAssistant:PersistentFace" :
                             std::format("ScreenshotLightingAssistant:Light{}", slot + 1));
                         // Deliberately NOT attached to actor/cell 3D and NOT a TESObjectREFR.
                         // The manager owns this transient light; only the renderer registers it.
@@ -437,7 +600,10 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                         params.nearDistance = desiredSettings.nearDistance;
                         params.depthBias = desiredSettings.depthBias;
                         owned.registration.reset(scene->AddLight(owned.point.get(), params));
-                        if (!owned.registration) { Halt(request.epoch, "描画側への光源登録に失敗しました。"); return; }
+                        if (!owned.registration) {
+                            if (request.running) { Halt(request.epoch, "描画側への光源登録に失敗しました。"); }
+                            return;
+                        }
                         // Use the engine's type-query interface, never reinterpret an unknown light.
                         bool correctKind = owned.registration->IsShadowLight() == desiredSettings.shadow;
                         if (correctKind && desiredSettings.shadow) {
@@ -446,7 +612,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                         }
                         if (!correctKind) {
                             logger::error("Renderer returned unexpected light kind (shadow={}, spot={})", desiredSettings.shadow, desiredSettings.spot);
-                            Halt(request.epoch, "要求と異なる種類の光源が返されたため停止しました。ログを確認してください。");
+                            if (request.running) { Halt(request.epoch, "要求と異なる種類の光源が返されたため停止しました。ログを確認してください。"); }
                             return;
                         }
                         owned.registeredSettings = desiredSettings;
@@ -464,6 +630,18 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 }
                 if (!Current(request.epoch)) { Clear(); return; }
                 const bool faceActive = static_cast<bool>(lights[kFaceRuntimeSlot].registration);
+                const bool persistentActive = photoFaceOwnsPlayer ? faceActive :
+                    static_cast<bool>(lights[kPersistentFaceRuntimeSlot].registration);
+                SetPersistentState(persistentActive,
+                    persistentRequested && persistent.intensity > 0.0F && !persistentActive,
+                    photoFaceOwnsPlayer);
+                if (!request.running) {
+                    std::scoped_lock lock(mutex);
+                    if (session.Get().epoch == request.epoch && status == "停止処理待ち : 設定・履歴は保持されています。") {
+                        status = "停止しました。ライト設定・履歴は保持されています。";
+                    }
+                    return;
+                }
                 const char* faceStatus = !request.lights.face.enabled ? "OFF" : request.lights.face.intensity == 0.0F ? "強さ0" :
                     faceActive ? "ON" : "待機（頭・向き・カメラを確認）";
                 const char* anchorStatus = positionFallback ? "3灯基準は足元＋1.2m（代替）" : headFallback ? "3灯基準は頭（代替）" : "3灯基準は胸";
@@ -494,6 +672,70 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 }
                 return RE::BSEventNotifyControl::kContinue;
             }
+
+            RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* events,
+                RE::BSTEventSource<RE::InputEvent*>*) override
+            {
+                for (auto* event = events ? *events : nullptr; event; event = event->next) {
+                    if (event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { continue; }
+                    const auto* button = event->AsButtonEvent();
+                    if (!button) { continue; }
+                    const auto device = event->GetDevice();
+                    const auto code = button->GetIDCode();
+
+                    if (device == RE::INPUT_DEVICE::kKeyboard) {
+                        if (!button->IsDown()) { continue; }
+                        if (CapturePersistentHotkey(code)) {
+                            return RE::BSEventNotifyControl::kContinue;
+                        }
+                        bool changed{};
+                        {
+                            std::scoped_lock lock(mutex);
+                            if (persistentFace.featureEnabled && persistentFace.hotkey != kNoPersistentFaceHotkey &&
+                                code == persistentFace.hotkey && session.Get().ready && !session.Get().blocked) {
+                                auto* ui = RE::UI::GetSingleton();
+                                if (ui && !ui->GameIsPaused() && !ui->IsMenuOpen(RE::Console::MENU_NAME)) {
+                                    persistentFace.enabled = !persistentFace.enabled;
+                                    changed = true;
+                                }
+                            }
+                        }
+                        if (changed) {
+                            persistentSaveRevision.fetch_add(1);
+                            dirty.store(true);
+                        }
+                        continue;
+                    }
+
+                    if (device != RE::INPUT_DEVICE::kGamepad) { continue; }
+                    if (button->IsDown() && CapturePersistentGamepadHotkey(code)) {
+                        return RE::BSEventNotifyControl::kContinue;
+                    }
+                    bool changed{};
+                    {
+                        std::scoped_lock lock(mutex);
+                        if (persistentFace.gamepadHotkey == kNoPersistentFaceHotkey ||
+                            code != persistentFace.gamepadHotkey) { continue; }
+
+                        // Crossing the threshold consumes this hold even while paused.
+                        // Releasing (or a new IsDown event) rearms it, preventing a
+                        // pause-menu hold from toggling unexpectedly after unpausing.
+                        if (!persistentGamepadHold.Update(button->IsPressed(), button->HeldDuration())) { continue; }
+                        if (persistentFace.featureEnabled && session.Get().ready && !session.Get().blocked) {
+                            auto* ui = RE::UI::GetSingleton();
+                            if (ui && !ui->GameIsPaused() && !ui->IsMenuOpen(RE::Console::MENU_NAME)) {
+                                persistentFace.enabled = !persistentFace.enabled;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if (changed) {
+                        persistentSaveRevision.fetch_add(1);
+                        dirty.store(true);
+                    }
+                }
+                return RE::BSEventNotifyControl::kContinue;
+            }
         };
     }
 
@@ -505,14 +747,39 @@ namespace ScreenshotLightingAssistant::RuntimeLight
         if (auto* ui = RE::UI::GetSingleton()) {
             ui->AddEventSink<RE::MenuOpenCloseEvent>(&runtime);
         }
+        if (auto* input = RE::BSInputDeviceManager::GetSingleton()) {
+            input->AddEventSink<RE::InputEvent*>(&runtime);
+            std::scoped_lock lock(runtime.mutex);
+            runtime.persistentHotkeyName = runtime.ResolveHotkeyName(
+                RE::INPUT_DEVICE::kKeyboard, runtime.persistentFace.hotkey);
+            runtime.persistentGamepadHotkeyName = runtime.ResolveHotkeyName(
+                RE::INPUT_DEVICE::kGamepad, runtime.persistentFace.gamepadHotkey);
+        } else {
+            logger::warn("Input manager unavailable; persistent face-light hotkeys were not registered");
+        }
         SetGameReady(true);
         // Worker touches only owned request state. Engine reads/writes are game tasks.
         // Never self-requeue inside AddTask: SKSE drains until empty in the same frame.
         std::thread([] {
             auto& rt = Runtime::Get();
+            auto observedSaveRevision = rt.persistentSaveRevision.load();
+            auto savedRevision = observedSaveRevision;
+            auto persistentChangedAt = std::chrono::steady_clock::now();
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(33));
-                if (!rt.dirty.load() && !rt.ownsLight.load() && !rt.Request().running) { continue; }
+                const auto revision = rt.persistentSaveRevision.load();
+                if (revision != observedSaveRevision) {
+                    observedSaveRevision = revision;
+                    persistentChangedAt = std::chrono::steady_clock::now();
+                }
+                // Sliders submit every UI frame. Debounce disk writes while preserving
+                // immediate in-game updates and save once the gesture settles.
+                if (revision != savedRevision &&
+                    std::chrono::steady_clock::now() - persistentChangedAt >= std::chrono::milliseconds(250)) {
+                    rt.SavePersistentConfiguration();
+                    savedRevision = revision;
+                }
+                if (!rt.dirty.load() && !rt.ownsLight.load() && !rt.Request().running && !rt.PersistentRequested()) { continue; }
                 if (rt.queued.exchange(true)) { continue; }
                 SKSE::GetTaskInterface()->AddTask([] {
                     auto& state = Runtime::Get();
@@ -525,7 +792,27 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 });
             }
         }).detach();
-        logger::info("Transient lighting runtime initialized; no persistent forms or cosave records");
+        logger::info("Lighting runtime initialized; persistent player face light uses file settings and no cosave records");
+    }
+
+    void ConfigurePersistentStorage(const std::filesystem::path& path)
+    {
+        auto& runtime = Runtime::Get();
+        PersistentFaceSettings settings;
+        std::string error;
+        const bool loaded = LoadPersistentFaceSettings(path, settings, error);
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.persistentFacePath = path;
+            if (loaded) { runtime.persistentFace = settings; }
+            runtime.persistentFaceError = std::move(error);
+            runtime.persistentHotkeyName = runtime.persistentFace.hotkey == kNoPersistentFaceHotkey ?
+                "未設定" : std::format("Keyboard 0x{:02X}", runtime.persistentFace.hotkey);
+            runtime.persistentGamepadHotkeyName = runtime.persistentFace.gamepadHotkey == kNoPersistentFaceHotkey ?
+                "未設定" : std::format("Gamepad 0x{:04X}", runtime.persistentFace.gamepadHotkey);
+        }
+        runtime.dirty.store(true);
+        logger::info("Persistent face-light settings: {}", loaded ? "loaded/defaulted" : "invalid file preserved");
     }
 
     void SetGameReady(bool ready)
@@ -588,5 +875,132 @@ namespace ScreenshotLightingAssistant::RuntimeLight
         auto& runtime = Runtime::Get();
         std::scoped_lock lock(runtime.mutex);
         runtime.session.Submit(epoch, lights);
+    }
+
+    void SetPersistentFaceEnabled(bool enabled)
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (runtime.persistentFace.enabled == enabled) { return; }
+            runtime.persistentFace.enabled = enabled;
+        }
+        runtime.persistentSaveRevision.fetch_add(1);
+        runtime.dirty.store(true);
+    }
+
+    void SetPersistentFaceSettings(const PersistentFaceSettings& settings)
+    {
+        auto normalized = settings;
+        normalized.basis = FaceLightBasis::Head;
+        if (!ValidPersistentFaceSettings(normalized)) { return; }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (runtime.persistentFace == normalized) { return; }
+            runtime.persistentFace = normalized;
+        }
+        runtime.persistentSaveRevision.fetch_add(1);
+        runtime.dirty.store(true);
+    }
+
+    void BeginPersistentHotkeyCapture()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        runtime.persistentHotkeyCapture = true;
+        runtime.persistentGamepadCapture = false;
+    }
+
+    void BeginPersistentGamepadCapture()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        runtime.persistentHotkeyCapture = false;
+        runtime.persistentGamepadCapture = true;
+    }
+
+    void CancelPersistentHotkeyCapture()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        runtime.persistentHotkeyCapture = false;
+        runtime.persistentGamepadCapture = false;
+    }
+
+    void ClearPersistentHotkey()
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.persistentHotkeyCapture = false;
+            runtime.persistentGamepadCapture = false;
+            runtime.persistentFace.hotkey = kNoPersistentFaceHotkey;
+            runtime.persistentHotkeyName = "未設定";
+        }
+        runtime.persistentSaveRevision.fetch_add(1);
+    }
+
+    void ClearPersistentGamepadHotkey()
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.persistentHotkeyCapture = false;
+            runtime.persistentGamepadCapture = false;
+            runtime.persistentFace.gamepadHotkey = kNoPersistentFaceHotkey;
+            runtime.persistentGamepadHotkeyName = "未設定";
+            runtime.persistentGamepadHold.Reset();
+        }
+        runtime.persistentSaveRevision.fetch_add(1);
+    }
+
+    bool CapturePersistentHotkey(std::uint32_t code)
+    {
+        auto& runtime = Runtime::Get();
+        bool assigned{};
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.persistentHotkeyCapture && !runtime.persistentGamepadCapture) { return false; }
+            if (code == static_cast<std::uint32_t>(RE::BSKeyboardDevice::Key::kEscape)) {
+                runtime.persistentHotkeyCapture = false;
+                runtime.persistentGamepadCapture = false;
+                return true;
+            }
+            if (!runtime.persistentHotkeyCapture) { return false; }
+            if (code == kNoPersistentFaceHotkey || code > kMaximumKeyboardScanCode) {
+                return true;
+            }
+            runtime.persistentHotkeyCapture = false;
+            runtime.persistentFace.hotkey = code;
+            runtime.persistentHotkeyName = runtime.ResolveHotkeyName(RE::INPUT_DEVICE::kKeyboard, code);
+            assigned = true;
+        }
+        if (assigned) {
+            runtime.persistentSaveRevision.fetch_add(1);
+            runtime.dirty.store(true);
+        }
+        return true;
+    }
+
+    bool CapturePersistentGamepadHotkey(std::uint32_t code)
+    {
+        auto& runtime = Runtime::Get();
+        bool assigned{};
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.persistentGamepadCapture) { return false; }
+            if (!ValidPersistentGamepadHotkey(code) || code == kNoPersistentFaceHotkey) { return true; }
+            runtime.persistentGamepadCapture = false;
+            runtime.persistentFace.gamepadHotkey = code;
+            runtime.persistentGamepadHotkeyName = runtime.ResolveHotkeyName(RE::INPUT_DEVICE::kGamepad, code);
+            runtime.persistentGamepadHold.Reset();
+            assigned = true;
+        }
+        if (assigned) {
+            runtime.persistentSaveRevision.fetch_add(1);
+            runtime.dirty.store(true);
+        }
+        return true;
     }
 }

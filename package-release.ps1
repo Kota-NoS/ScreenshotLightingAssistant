@@ -4,8 +4,8 @@ $project = $PSScriptRoot
 $workRoot = Split-Path -Parent $project
 $releaseRoot = Split-Path -Parent $workRoot
 $out = Join-Path $releaseRoot 'outputs'
-$version = '0.1.29'
-$releaseLabel = 'ScreenshotLightingAssistant-0.1.29'
+$version = '0.2.0'
+$releaseLabel = 'ScreenshotLightingAssistant-0.2.0'
 
 $installStage = Join-Path $out ($releaseLabel + '-MO2')
 $sourceStage = Join-Path $out ($releaseLabel + '-source')
@@ -20,15 +20,15 @@ foreach ($path in @($installStage, $sourceStage, $symbolsStage, $installZip, $so
     }
 }
 
-$oldArchive = Join-Path $out 'ScreenshotLightingAssistant-0.1.28-MO2-test.zip'
-$oldHash = '553FC2E3BAA58D92268EB3666D622E20E82C7EC4A1BC5305303F6DB5EEEB56D3'
+$oldArchive = Join-Path $out 'ScreenshotLightingAssistant-0.1.29-MO2.zip'
+$oldHash = '10943A571C1B21C564329DE9957B1C91D5D51242EFC07F4B9F6C3BCE189E7D82'
 if ((Get-FileHash -LiteralPath $oldArchive).Hash -ne $oldHash) {
     throw 'Previous release hash mismatch'
 }
 
 $dll = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.dll')
 $pdb = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.pdb')
-if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.1.29.0') {
+if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.2.0.0') {
     throw 'Wrong DLL version'
 }
 
@@ -76,7 +76,7 @@ foreach ($file in @(
 )) {
     $sourceFiles[$file] = Join-Path $project $file
 }
-if ($sourceFiles.Count -ne 38) {
+if ($sourceFiles.Count -ne 40) {
     throw ('Unexpected source file set; review before packaging. Count=' + $sourceFiles.Count)
 }
 

@@ -9,6 +9,7 @@
 #include "TargetModel.h"
 #include "Localization.h"
 #include "StorageLocation.h"
+#include "PersistentFaceSettings.h"
 #include <regex>
 #include <set>
 
@@ -2750,6 +2751,114 @@ namespace
         editor.FinishNumericEdit();
         Require(editor.CurrentLight() == empty, "unplaced lights cannot be adjusted by disabled controls");
     }
+
+    void PersistentFacePreferences()
+    {
+        PersistentFaceSettings settings;
+        Require(ValidPersistentFaceSettings(settings), "persistent face defaults are valid");
+        Require(settings.featureEnabled && !settings.enabled && settings.hotkey == kNoPersistentFaceHotkey &&
+            settings.basis == FaceLightBasis::Head, "persistent face defaults are safe and unassigned");
+
+        settings.featureEnabled = false;
+        settings.enabled = true;
+        settings.hotkey = 0x42;
+        settings.gamepadHotkey = 0x0100;
+        settings.intensity = 1.25F;
+        settings.range = 1.75F;
+        settings.heightOffset = -0.20F;
+        settings.basis = FaceLightBasis::Head;
+        const auto encoded = EncodePersistentFaceSettings(settings);
+        PersistentFaceSettings decoded;
+        Require(!encoded.empty() && DecodePersistentFaceSettings(encoded, decoded) && decoded == settings,
+            "persistent face settings round-trip exactly");
+        Require(!DecodePersistentFaceSettings(encoded + "unknown 1\n", decoded),
+            "unknown persistent settings are rejected");
+        auto duplicate = encoded + "enabled 1\n";
+        Require(!DecodePersistentFaceSettings(duplicate, decoded), "duplicate persistent settings are rejected");
+        auto invalidHotkey = settings;
+        invalidHotkey.hotkey = kMaximumKeyboardScanCode + 1;
+        Require(!ValidPersistentFaceSettings(invalidHotkey) && EncodePersistentFaceSettings(invalidHotkey).empty(),
+            "out-of-range keyboard scan code is rejected");
+        auto invalidGamepad = settings;
+        invalidGamepad.gamepadHotkey = 0x0800;
+        Require(!ValidPersistentFaceSettings(invalidGamepad) && EncodePersistentFaceSettings(invalidGamepad).empty(),
+            "unknown gamepad button code is rejected");
+        auto invalidFloat = settings;
+        invalidFloat.intensity = std::numeric_limits<float>::quiet_NaN();
+        Require(!ValidPersistentFaceSettings(invalidFloat), "nonfinite persistent values are rejected");
+
+        const std::string version1 =
+            "SLA PERSISTENT FACE 1\n"
+            "enabled 1\n"
+            "hotkey 66\n"
+            "intensity 1.250000\n"
+            "range 1.750000\n"
+            "height -0.200000\n"
+            "basis camera\n";
+        PersistentFaceSettings migrated;
+        Require(DecodePersistentFaceSettings(version1, migrated) && migrated.featureEnabled && migrated.enabled &&
+            migrated.hotkey == 66 && migrated.gamepadHotkey == kNoPersistentFaceHotkey &&
+            migrated.basis == FaceLightBasis::Head,
+            "version 1 persistent settings migrate enabled with gamepad unassigned and head-facing placement");
+
+        const std::string version2 =
+            "SLA PERSISTENT FACE 2\n"
+            "enabled 1\n"
+            "hotkey 66\n"
+            "gamepad 256\n"
+            "intensity 1.250000\n"
+            "range 1.750000\n"
+            "height -0.200000\n"
+            "basis camera\n";
+        Require(DecodePersistentFaceSettings(version2, migrated) && migrated.featureEnabled && migrated.enabled &&
+            migrated.hotkey == 66 && migrated.gamepadHotkey == 256 &&
+            migrated.basis == FaceLightBasis::Head,
+            "version 2 persistent settings migrate enabled and head-facing while preserving both hotkeys");
+
+        PersistentGamepadHoldGate hold;
+        Require(!hold.Update(true, 0.0F) && !hold.Update(true, 0.59F),
+            "gamepad short press does not toggle");
+        Require(hold.Update(true, kPersistentGamepadHoldSeconds) && !hold.Update(true, 0.90F),
+            "gamepad hold toggles once at the threshold");
+        Require(!hold.Update(false, 0.90F) && !hold.Update(true, 0.0F) &&
+            hold.Update(true, kPersistentGamepadHoldSeconds),
+            "gamepad release rearms the next long press");
+        hold.Reset();
+        Require(!hold.Update(true, std::numeric_limits<float>::quiet_NaN()),
+            "nonfinite gamepad hold duration fails closed");
+
+        const auto root = std::filesystem::temp_directory_path() / ("sla-persistent-face-tests-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        Require(std::filesystem::create_directory(root), "persistent settings fixture is uniquely owned");
+        const auto path = root / "persistent-face.sla";
+        std::string error;
+        PersistentFaceSettings missing;
+        missing.enabled = true;
+        Require(LoadPersistentFaceSettings(path, missing, error) && missing == PersistentFaceSettings{} && error.empty(),
+            "missing persistent settings use safe defaults without creating a file");
+        Require(SavePersistentFaceSettings(path, settings, error) && error.empty(),
+            "persistent settings save atomically");
+        PersistentFaceSettings loaded;
+        Require(LoadPersistentFaceSettings(path, loaded, error) && loaded == settings,
+            "persistent settings reload across process sessions");
+
+        std::ifstream beforeStream(path, std::ios::binary);
+        const std::string before{std::istreambuf_iterator<char>(beforeStream), {}};
+        {
+            std::ofstream corrupt(path, std::ios::binary | std::ios::trunc);
+            corrupt << "not a valid SLA setting\n";
+        }
+        PersistentFaceSettings preserved;
+        Require(!LoadPersistentFaceSettings(path, preserved, error) && !error.empty(),
+            "invalid persistent settings report an error");
+        Require(!SavePersistentFaceSettings(path, settings, error),
+            "invalid existing settings are not silently overwritten");
+        std::ifstream corruptStream(path, std::ios::binary);
+        const std::string corruptBytes{std::istreambuf_iterator<char>(corruptStream), {}};
+        Require(corruptBytes == "not a valid SLA setting\n" && corruptBytes != before,
+            "invalid persistent settings remain untouched for diagnosis");
+        std::cout << "Persistent face fixtures: " << root.string() << '\n';
+    }
 }
 
 int main()
@@ -2795,6 +2904,7 @@ int main()
         LanguagePresentation();
         StorageMigration();
         TargetSelectionAndUniformDiagrams();
+        PersistentFacePreferences();
         std::cout << "PASS: " << checks << " lighting-state/layout/runtime-model checks\n";
         return 0;
     } catch (const std::exception& error) {

@@ -68,6 +68,10 @@ namespace ScreenshotLightingAssistant
             std::error_code error;
             if (!std::filesystem::exists(legacyRoot, error)) { return !error; }
             if (!CopyMissingFile(legacyRoot / "ui-language.sla", preferredRoot / "ui-language.sla", copied)) { return false; }
+            const auto persistent = legacyRoot / "persistent-face.sla";
+            const bool persistentExists = std::filesystem::exists(persistent, error);
+            if (error || (persistentExists && !CopyMissingFile(persistent,
+                    preferredRoot / "persistent-face.sla", copied))) { return false; }
             const auto source = legacyRoot / "Presets";
             if (!std::filesystem::exists(source, error)) { return !error; }
             for (std::filesystem::recursive_directory_iterator it(source,

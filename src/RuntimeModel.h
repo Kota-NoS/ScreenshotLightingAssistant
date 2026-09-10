@@ -47,7 +47,8 @@ namespace ScreenshotLightingAssistant
     };
 
     inline constexpr std::size_t kFaceRuntimeSlot = kManualLightCount;
-    inline constexpr std::size_t kRuntimeLightCount = kManualLightCount + 1;
+    inline constexpr std::size_t kPersistentFaceRuntimeSlot = kManualLightCount + 1;
+    inline constexpr std::size_t kRuntimeLightCount = kManualLightCount + 2;
     inline std::optional<LightSettings> RuntimeSettings(const Scene& scene, std::size_t slot)
     {
         if (slot < scene.size()) { return scene[slot]; }

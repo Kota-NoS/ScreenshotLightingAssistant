@@ -1,7 +1,7 @@
 set_xmakever("3.0.0")
 
 local plugin_name = "ScreenshotLightingAssistant"
-local plugin_version = "0.1.29"
+local plugin_version = "0.2.0"
 local commonlib_dir = os.getenv("COMMONLIB_SSE_FOLDER") or "lib/commonlibsse-ng"
 
 set_project(plugin_name)
@@ -28,7 +28,7 @@ target(plugin_name, function()
     add_rules("commonlibsse-ng.plugin", {
         name = plugin_name,
         author = "kota (@kotaSkyrim) / developed with OpenAI Codex",
-        description = "Three photography lights with an independent face fill for Skyrim screenshots.",
+        description = "Photography lighting plus an optional persistent player face light for Skyrim.",
         version = plugin_version,
         options = { address_library = true }
     })
@@ -50,6 +50,7 @@ target("lighting-state-tests", function()
     add_files("src/PresetLibrary.cpp")
     add_files("src/Localization.cpp")
     add_files("src/StorageLocation.cpp")
+    add_files("src/PersistentFaceSettings.cpp")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
     add_includedirs("src")
     add_cxxflags("/utf-8", { force = true })

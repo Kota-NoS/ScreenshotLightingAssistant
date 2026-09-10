@@ -51,6 +51,9 @@ namespace ScreenshotLightingAssistant::UI
         bool g_registered{ false };
         bool g_positionWindowOpen{ false };
         bool g_focusPositionWindow{ false };
+        bool g_persistentFaceWindowOpen{ false };
+        bool g_focusPersistentFaceWindow{ false };
+        SKSEMenuFramework::Model::InputEvent* g_frameworkInputEvent{};
         std::unique_ptr<PresetLibrary> g_library;
         bool g_openPresetRequested{};
         bool g_openLightLibraryRequested{};
@@ -66,6 +69,20 @@ namespace ScreenshotLightingAssistant::UI
         std::string g_libraryLoadError;
         std::filesystem::path g_languagePath;
         std::string g_languageError;
+
+        bool __stdcall CaptureFrameworkInput(RE::InputEvent* event)
+        {
+            if (!event || event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { return false; }
+            const auto* button = event->AsButtonEvent();
+            if (!button || !button->IsDown()) { return false; }
+            if (event->GetDevice() == RE::INPUT_DEVICE::kKeyboard) {
+                return RuntimeLight::CapturePersistentHotkey(button->GetIDCode());
+            }
+            if (event->GetDevice() == RE::INPUT_DEVICE::kGamepad) {
+                return RuntimeLight::CapturePersistentGamepadHotkey(button->GetIDCode());
+            }
+            return false;
+        }
 
         std::filesystem::path PreferredStorageRoot()
         {
@@ -250,6 +267,39 @@ namespace ScreenshotLightingAssistant::UI
 
         float ButtonWidth(const char* a_label);
         void DrawPositionWindowButton();
+
+        float PersistentFaceLauncherWidth()
+        {
+            return std::max(ImGuiMCP::GetFrameHeight(), ButtonWidth("F"));
+        }
+
+        bool DrawPersistentFaceLauncher(bool selected)
+        {
+            const float width = PersistentFaceLauncherWidth();
+            const float height = ImGuiMCP::GetFrameHeight();
+            const ImVec2 top = ImGuiMCP::GetCursorScreenPos();
+            const bool clicked = ImGuiMCP::InvisibleButton("##persistent_face_launcher", { width, height });
+            const bool hovered = ImGuiMCP::IsItemHovered() || ImGuiMCP::IsItemFocused();
+            const ImVec2 end{ top.x + width, top.y + height };
+            auto* drawList = ImGuiMCP::GetWindowDrawList();
+            ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, top, end,
+                selected ? Color(112, 80, 32) : hovered ? Color(43, 55, 69) : Color(26, 33, 43), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRect(drawList, top, end,
+                selected ? Color(255, 202, 102) : hovered ? Color(150, 189, 220) : Color(78, 94, 111), 4.0F, 0, 1.5F);
+
+            const ImVec2 center{ top.x + width * .5F, top.y + height * .5F };
+            const float scale = std::min(width, height) / 32.0F;
+            const auto tint = selected ? Color(255, 224, 155) : hovered ? Color(180, 215, 240) : Color(180, 201, 218);
+            ImGuiMCP::ImDrawListManager::AddCircle(drawList, { center.x, center.y - 4.0F * scale }, 6.0F * scale,
+                tint, 24, 1.5F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, { center.x - 10.0F * scale, center.y + 9.0F * scale },
+                { center.x - 5.0F * scale, center.y + 3.0F * scale }, tint, 1.5F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, { center.x - 5.0F * scale, center.y + 3.0F * scale },
+                { center.x + 5.0F * scale, center.y + 3.0F * scale }, tint, 1.5F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, { center.x + 5.0F * scale, center.y + 3.0F * scale },
+                { center.x + 10.0F * scale, center.y + 9.0F * scale }, tint, 1.5F * scale);
+            return clicked;
+        }
 
         void DrawFaceControls(const ImVec2& origin, float canvas, bool& anyActive)
         {
@@ -1514,7 +1564,7 @@ namespace ScreenshotLightingAssistant::UI
             if (!g_libraryNotice.empty()) { ImGuiMCP::TextWrapped("%s", g_libraryNotice.c_str()); }
             if (!g_libraryLoadError.empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_libraryLoadError).c_str()); }
             if (g_library && !g_library->ViewError().empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_library->ViewError()).c_str()); }
-            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.1.29"));
+            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.2.0"));
             if (ImGuiMCP::IsItemHovered() && g_library) {
                 const auto utf8 = g_library->Directory().u8string();
                 Tooltip(Tr("%s\nMO2ではこの仮想Dataパスへの新規ファイルが通常Overwriteへ入ります。\n登録は再起動後も残り、ゲームのセーブとは独立です。\n登録から外したファイルは、この中のArchivedへ退避します。\n履歴・栞の登録は起動中のみの一時退避です。"), reinterpret_cast<const char*>(utf8.c_str()));
@@ -1577,6 +1627,88 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::PopStyleColor();
         }
 
+        void DrawPersistentFaceWindow(const RuntimeLight::View& runtime)
+        {
+            if (!g_persistentFaceWindowOpen) { return; }
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            const ImVec2 maximum{viewport->WorkSize.x * .9F, viewport->WorkSize.y * .9F};
+            ImGuiMCP::SetNextWindowSize({std::min(430.0F, maximum.x), 0}, ImGuiMCP::ImGuiCond_FirstUseEver);
+            ImGuiMCP::SetNextWindowSizeConstraints({std::min(300.0F, maximum.x), 0}, maximum);
+            if (g_focusPersistentFaceWindow) {
+                ImGuiMCP::SetNextWindowFocus();
+                g_focusPersistentFaceWindow = false;
+            }
+            bool open = true;
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_WindowBg, Color(12, 18, 27));
+            const bool visible = ImGuiMCP::Begin(Tr("常用フェイスライト###sla_persistent_face"), &open,
+                ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize | ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            if (visible) {
+                auto settings = runtime.persistentFace;
+                bool changed{};
+                changed = ImGuiMCP::Checkbox(Tr("常用フェイスライト機能を使用"), &settings.featureEnabled) || changed;
+                if (!settings.featureEnabled) {
+                    ImGuiMCP::TextWrapped(Tr("機能OFF：ホットキーは反応しません。"));
+                } else if (runtime.persistentFaceUsesPhotoLight) {
+                    ImGuiMCP::TextWrapped(Tr("撮影用フェイスライトを一時的に使用中です。撮影を止めると常用設定へ戻ります。"));
+                } else if (!settings.enabled) {
+                    ImGuiMCP::TextWrapped(Tr("待機：プレイヤーライトはOFFです。"));
+                } else if (settings.intensity == 0.0F) {
+                    ImGuiMCP::TextWrapped(Tr("待機：強さが0です。"));
+                } else if (runtime.persistentFaceActive) {
+                    ImGuiMCP::TextWrapped(Tr("ON：プレイヤーへ追従しています。"));
+                } else if (runtime.persistentFaceWaiting) {
+                    ImGuiMCP::TextWrapped(Tr("待機：ロード中、または頭を取得できません。"));
+                }
+                ImGuiMCP::Separator();
+                changed = ImGuiMCP::Checkbox(Tr("プレイヤー"), &settings.enabled) || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("強さ##persistent"), &settings.intensity,
+                    0.0F, kFaceIntensityMax, "%.2f") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("光の範囲##persistent"), &settings.range,
+                    kFaceRangeMin, kFaceRangeMax, "%.2f m") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("上下 (+上)##persistent"), &settings.heightOffset,
+                    kFaceHeightMin, kFaceHeightMax, "%+.2f m") || changed;
+                if (changed) { RuntimeLight::SetPersistentFaceSettings(settings); }
+
+                ImGuiMCP::Separator();
+                ImGuiMCP::Text(Tr("キーボード：%s"), Tr(runtime.persistentHotkeyName.c_str()));
+                if (runtime.persistentHotkeyCapture) {
+                    ImGuiMCP::TextWrapped(Tr("登録するキーを押してください。Escでキャンセルします。"));
+                    if (SelectableButton(Tr("キャンセル##persistent_keyboard"))) { RuntimeLight::CancelPersistentHotkeyCapture(); }
+                } else {
+                    if (SelectableButton(Tr("変更##persistent_keyboard"))) { RuntimeLight::BeginPersistentHotkeyCapture(); }
+                    ImGuiMCP::SameLine();
+                    ImGuiMCP::BeginDisabled(settings.hotkey == kNoPersistentFaceHotkey);
+                    if (SelectableButton(Tr("解除##persistent_keyboard"))) { RuntimeLight::ClearPersistentHotkey(); }
+                    ImGuiMCP::EndDisabled();
+                }
+                ImGuiMCP::Text(Tr("ゲームパッド（0.6秒長押し）：%s"), Tr(runtime.persistentGamepadHotkeyName.c_str()));
+                if (runtime.persistentGamepadCapture) {
+                    ImGuiMCP::TextWrapped(Tr("登録するゲームパッドボタンを押してください。Escでキャンセルします。"));
+                    if (SelectableButton(Tr("キャンセル##persistent_gamepad"))) { RuntimeLight::CancelPersistentHotkeyCapture(); }
+                } else {
+                    if (SelectableButton(Tr("変更##persistent_gamepad"))) { RuntimeLight::BeginPersistentGamepadCapture(); }
+                    ImGuiMCP::SameLine();
+                    ImGuiMCP::BeginDisabled(settings.gamepadHotkey == kNoPersistentFaceHotkey);
+                    if (SelectableButton(Tr("解除##persistent_gamepad"))) { RuntimeLight::ClearPersistentGamepadHotkey(); }
+                    ImGuiMCP::EndDisabled();
+                }
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextWrapped(Tr("白色・影なしのプレイヤー専用ライトです。撮影ライトとは別に使え、ロードや場所移動の完了後に自動で戻ります。ゲームのセーブデータには保存しません。"));
+                if (!runtime.persistentFaceError.empty()) {
+                    ImGuiMCP::TextWrapped("%s", Tr(runtime.persistentFaceError.c_str()));
+                }
+            }
+            ImGuiMCP::End();
+            ImGuiMCP::PopStyleColor();
+            if (!open) {
+                g_persistentFaceWindowOpen = false;
+                RuntimeLight::CancelPersistentHotkeyCapture();
+            }
+        }
+
         void __stdcall Render()
         {
             // The token comes from before this UI frame. A load/stop invalidates it,
@@ -1596,13 +1728,23 @@ namespace ScreenshotLightingAssistant::UI
             if (ImGuiMCP::IsItemHovered()) {
                 Tooltip(Tr("%s\n\nLight 1～3と独立したフェイスライトを実機反映します。\nメニューを閉じても点灯を維持します。停止・ロード・場所の移動ではフェイスを含む全灯を撤去し、自動再開しません。\n通常3灯は正面更新までカメラ基準を固定します。フェイスだけは頭・現在のカメラ位置へ自動追従します。"), runtime.status.c_str());
             }
-            if (ButtonWidth(powerLabel) + ButtonWidth("P") + ImGuiMCP::GetStyle()->ItemSpacing.x * 2 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
+            const float persistentFaceWidth = PersistentFaceLauncherWidth();
+            if (ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth +
+                ImGuiMCP::GetStyle()->ItemSpacing.x * 3 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
             if (SelectableButton("P")) { g_editor.FinishNumericEdit(); g_openPresetRequested = true; }
             if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("プリセットを選ぶ（下のボタンと同じ一覧）")); }
+            if (ImGuiMCP::GetContentRegionAvail().x >= persistentFaceWidth) { ImGuiMCP::SameLine(); }
+            if (DrawPersistentFaceLauncher(runtime.persistentFace.featureEnabled && runtime.persistentFace.enabled)) {
+                g_editor.FinishNumericEdit();
+                g_persistentFaceWindowOpen = true;
+                g_focusPersistentFaceWindow = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("常用フェイスライトの設定を開きます。機能とプレイヤーライトがONのとき橙色になります。")); }
             const char* languageLabel = Current() == Language::Japanese ? "EN" : "JP";
             const float languageWidth = ButtonWidth(languageLabel);
             if (ImGuiMCP::GetContentRegionAvail().x >= languageWidth &&
-                ButtonWidth(powerLabel) + ButtonWidth("P") + languageWidth + ImGuiMCP::GetStyle()->ItemSpacing.x * 4 <= topWidth) { ImGuiMCP::SameLine(); }
+                ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + languageWidth +
+                    ImGuiMCP::GetStyle()->ItemSpacing.x * 5 <= topWidth) { ImGuiMCP::SameLine(); }
             if (SelectableButton(languageLabel)) {
                 g_editor.FinishNumericEdit();
                 const auto next = Current() == Language::Japanese ? Language::English : Language::Japanese;
@@ -1630,6 +1772,7 @@ namespace ScreenshotLightingAssistant::UI
             bool anyActive = false;
             DrawPrototypeControls(anyActive);
             DrawPositionWindow(anyActive);
+            DrawPersistentFaceWindow(runtime);
             if (g_openPresetRequested) {
                 g_managePresets = false;
                 g_presetPicker.Open();
@@ -1657,12 +1800,16 @@ namespace ScreenshotLightingAssistant::UI
         }
 
         SKSEMenuFramework::SetSection("Screenshot Lighting Assistant");
+        // The framework blocks Skyrim's normal input dispatch while its menu is open.
+        // Register its dedicated callback so hotkey capture can finish in-place.
+        g_frameworkInputEvent = SKSEMenuFramework::AddInputEvent(CaptureFrameworkInput);
         const auto preferredRoot = PreferredStorageRoot();
         const auto logDirectory = SKSE::log::log_directory();
         const auto legacyRoot = logDirectory ? *logDirectory / "ScreenshotLightingAssistant" : std::filesystem::path{};
         const auto storage = PrepareStorageLocation(preferredRoot, legacyRoot);
         if (!storage.root.empty()) {
             g_languagePath = storage.root / "ui-language.sla";
+            RuntimeLight::ConfigurePersistentStorage(storage.root / "persistent-face.sla");
             LoadPreference(g_languagePath, g_languageError);
             g_libraryNotice = storage.notice.empty() ? std::string{} : Tr(storage.notice.c_str());
             g_library = std::make_unique<PresetLibrary>(storage.root / "Presets");

@@ -1,6 +1,18 @@
-# Screenshot Lighting Assistant 0.1.29
+# Screenshot Lighting Assistant 0.2.0
 
-Three adjustable photography lights and an independent white face fill for Skyrim SE/AE. Version 0.1.29 is the initial public release, promoted from the game-tested RC2 without changing its DLL.
+Three adjustable photography lights, an independent photography face fill, and an optional persistent player face light for Skyrim SE/AE. Version 0.2.0 is the current stable release.
+
+## Changed in 0.2.0
+
+- Added a compact person icon that opens a separate Persistent Face Light window without changing the circular photography-light layout.
+- Added a feature master switch at the top of the Persistent Face Light window. Turning it off extinguishes the persistent light and ignores both assigned hotkeys while preserving the player-light state, values and bindings. Turning it back on resumes the preserved state.
+- The persistent light is player-only, white and shadowless. Its placement is now always head-facing; intensity, range and height remain independently adjustable.
+- An optional keyboard hotkey switches it on or off. Select Change and press one keyboard key without closing the framework menu; press Esc to cancel without changing the current assignment. Clear removes the assignment. SKSE Menu Framework's dedicated input callback handles this in-menu capture.
+- A separate gamepad button can be assigned. Hold it for about 0.6 seconds during normal gameplay to toggle once. A short press does nothing, and holding the button cannot retrigger until it is released.
+- Its feature state, light state, both hotkeys and values are stored in `persistent-face.sla`, independently of Skyrim saves, and restored after restarting the game. Older beta profiles remain readable and migrate to head-facing placement.
+- The persistent player light is removed during loading and recreated only after the player, cell and renderer are safe again. Ordinary photography lights still stop on loading/location changes and do not auto-restart.
+- When photography targets the player and its photography face light is enabled, that light temporarily replaces the persistent one to prevent duplicate illumination. Stopping photography restores the persistent profile. An NPC can still use the photography face light while the persistent light remains on the player.
+- Lighting, persistence, transitions, in-menu assignment, gamepad long-press behavior, the master switch, head-facing migration and the revised status UI all passed the supplied in-game checklist. Version 0.2.0 promotes the same feature code tested in beta4.
 
 ## Changed in 0.1.29
 
@@ -62,7 +74,7 @@ Three adjustable photography lights and an independent white face fill for Skyri
 
 ## Install
 
-Close Skyrim. Back up the previous `ScreenshotLightingAssistant` storage folder and keep the previous release. Install **ScreenshotLightingAssistant-0.1.29-MO2.zip** with MO2; disable the previous DLL. The archive root contains `SKSE/Plugins` and `docs`, with no extra `Data` wrapper. Do not install the separate source or symbols ZIP in MO2.
+Close Skyrim. Back up the previous `ScreenshotLightingAssistant` storage folder and keep your previous installer for rollback. Install **ScreenshotLightingAssistant-0.2.0-MO2.zip** with MO2; disable the previous DLL. The archive root contains `SKSE/Plugins` and `docs`, with no extra `Data` wrapper. Do not install the separate source or symbols ZIP in MO2.
 
 Requires SKSE64, Address Library, SKSE Menu Framework 3, and the Microsoft Visual C++ 2015–2022 Redistributable (x64). This build targets SE/AE, not VR. No ESP, game INI edits or changes to other mods are included.
 
@@ -77,6 +89,7 @@ Open Screenshot Lighting Assistant > Lighting in the mod control panel. Use EN a
 - Shadow bias appears only in Spot mode. Hover for its explanation. It is depth bias, not a shadow blur control.
 - Save light stores type and color only. Favorites > Manage > Rename changes a saved light's name.
 - P / Choose preset opens the same gallery. Save preset stores the full three-light setup, optionally including the face light. Enable Manage in the gallery to rename, reorder or remove your presets.
+- The person icon beside P opens Persistent Face Light settings. Enabling Player keeps an independent face light on the player outside photography sessions; assign a keyboard key or a long-press gamepad button for quick on/off control.
 - Undo/Redo and the bookmark cover lighting values. The bookmark lasts only until game exit; use Save preset for durable storage.
 - Preset diagrams use the older 140px proportions, uniformly enlarged, with name and light information on the right.
 
@@ -88,7 +101,7 @@ Console selection and crosshair target are optional alternatives. In free camera
 
 Changing the subject switches the lights off but keeps their settings. Close the subject window, check the displayed name, then press Start lighting. The three lights follow the subject's chest/head anchor; the face light uses that subject's head and the selected placement mode. Camera alignment still controls the three-light arrangement.
 
-Only one subject is supported at a time. This mod does not freeze actors or change AI, schedules, poses or NPC records. It never force-loads NPCs. Subject loss or cell changes stop the lights; loading/main-menu transitions clear subject selection back to the player. Lights never restart automatically. Subjects, handles and camera transforms are not written to presets or game saves.
+Only one photography subject is supported at a time. This mod does not freeze actors or change AI, schedules, poses or NPC records. It never force-loads NPCs. Subject loss or cell changes stop the photography lights; loading/main-menu transitions clear subject selection back to the player. Photography lights never restart automatically. The optional persistent player face light is separate and safely recreates after transitions. Subjects, handles and camera transforms are not written to presets or game saves.
 
 ## Storage and recovery
 
@@ -100,11 +113,11 @@ Existing .slalight/.slaset formats and saved light type IDs are unchanged. Favor
 
 Before renaming, an exact backup is placed in Archived with a filename ending in -before-rename-<original filename>. The original entry is atomically replaced under its existing filename. To restore a backup manually, close Skyrim, preserve the current file separately, then restore the backup under the corresponding original filename. Simply copying it into Presets with a different name creates a separate registration.
 
-The language preference is stored one directory above Presets in ui-language.sla. Unknown/corrupt preferences are preserved; a language switch then applies only to the current session. Invalid saved entries are reported without deleting their files.
+The language preference is stored one directory above Presets in `ui-language.sla`; the persistent player face-light profile is stored beside it in `persistent-face.sla`. Unknown/corrupt preferences are preserved rather than overwritten. Invalid saved entries are reported without deleting their files.
 
 ## Verification boundary
 
-MSVC DLL build and 44,840 automated checks passed. Clean installation, restart persistence, legacy migration, lighting behavior, localization and the RC2 Reset values control were exercised in game by the author. This does not claim compatibility with every game build or mod combination. Keep only this DLL enabled.
+The MSVC DLL build and automated checks pass. The 0.1.29 photography features and beta2 persistent-light behavior were exercised in game by the author. Beta3's gamepad input still requires in-game verification. This does not claim compatibility with every game build or mod combination. Keep only one version of this DLL enabled.
 
 This release does not claim compatibility with every game build or mod combination. See `RELEASE_CHECKLIST_JA.md` for the Japanese verification record and `ENGINE_NOTES.md` for implementation details. Source licensing is in `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 

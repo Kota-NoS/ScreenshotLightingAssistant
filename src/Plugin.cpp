@@ -34,7 +34,7 @@ namespace
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
     SKSE::Init(a_skse);
-    logger::info("Screenshot Lighting Assistant 0.1.29 loading");
+    logger::info("Screenshot Lighting Assistant 0.2.0 loading");
 
     if (!SKSE::GetTaskInterface()) {
         logger::critical("Game task interface unavailable; refusing to enable runtime lighting");

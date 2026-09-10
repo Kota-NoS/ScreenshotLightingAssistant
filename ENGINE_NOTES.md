@@ -1,3 +1,15 @@
+# 0.2.0 final — persistent player face light
+
+- Adds a fifth owned renderer slot for a player-only persistent face light. It remains a transient `NiPointLight`: no form, reference, ESP, Papyrus script or co-save record is created.
+- The persistent profile is file-backed (`persistent-face.sla`) and independent from photography scenes/history. Loading and cell/renderer transitions remove the owned light first; the 33ms worker requests a new one-shot game task only after runtime state becomes safe.
+- The final UI replaces the top-row `F` label with a vector-drawn person icon. Its hit target, active-state highlight and window-opening behavior remain separate from the photography face-light controls inside the circular diagram.
+- SKSE Menu Framework's dedicated input callback handles keyboard and gamepad assignment while its blocking menu is open; the normal `BSTEventSink<InputEvent*>` continues to handle gameplay toggles. Escape cancels either capture, and normal toggles are ignored while the game is paused or the console is open.
+- A separately stored gamepad button uses `ButtonEvent::HeldDuration()`. The 0.60-second threshold latches before checking paused gameplay, so one hold fires at most once and a hold begun in a paused menu cannot fire after that menu closes. Release or a new down-edge rearms the latch. Gameplay events are observed but not globally consumed, so the button's original Skyrim action is not suppressed.
+- Persistent settings format 3 adds a feature master flag. Strict format-1 and format-2 readers remain available; both migrate with the feature master enabled, and all older persistent camera-facing values normalize to head-facing placement. Writes use format 3.
+- The feature master gates persistent renderer ownership and both gameplay hotkeys without discarding the saved light state, values or bindings. Its OFF transition dirties the existing one-shot game-task pump so the owned light is retired on the game thread.
+- Player photography face light takes temporary ownership when enabled, preventing two face lights on the same actor. NPC photography can coexist with the persistent player slot.
+- Lighting, persistence, renderer teardown/recreate, visual ownership, in-menu capture, gamepad timing, the master gate, format-3 migration and the revised status UI all passed the in-game checklist. The beta4 feature code was promoted unchanged to 0.2.0 final.
+
 # 0.1.29 final — initial public release
 
 - `ResetCurrentValues` resets only manual-light intensity, range, distance, height, fine offsets and shadow bias to centralized defaults. Direction, recipe/tint, projection/castsShadow, enabled state, placement and face settings remain value-identical.
