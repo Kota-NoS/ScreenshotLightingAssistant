@@ -10,6 +10,8 @@
 #include "Localization.h"
 #include "StorageLocation.h"
 #include "PersistentFaceSettings.h"
+#include "PhotoEffectSettings.h"
+#include "PhotoEffectMotion.h"
 #include <regex>
 #include <set>
 
@@ -2497,7 +2499,8 @@ namespace
 
         const auto migrated = PrepareStorageLocation(preferred, legacy);
         auto read = [](const auto& path) { std::ifstream in(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(in), {}); };
-        Require(migrated.root == preferred && !migrated.usingLegacy && migrated.importedFiles == 2,
+        Require(migrated.root == preferred && !migrated.usingLegacy && !migrated.usingResolvedOwner &&
+                migrated.importedFiles == 2,
             "writable Data storage imports missing legacy files once");
         Require(read(preferred / "ui-language.sla") == "SLA LANGUAGE 1\nja\n" &&
             read(preferred / "Presets" / "Archived" / "old.slalight") == "old",
@@ -2518,7 +2521,7 @@ namespace
             "unwritable Data path safely falls back without changing the blocker");
         const auto clean = PrepareStorageLocation(root / "clean", {});
         Require(clean.root == root / "clean" && !clean.usingLegacy &&
-            read(clean.root / "storage-v2.sla") == "SLA STORAGE 2\n", "fresh install prepares Data storage without legacy input");
+            !std::filesystem::exists(clean.root), "read-only startup does not create an empty Data or MO2 Overwrite folder");
         std::cout << "Storage fixtures: " << root.string() << '\n';
     }
 
@@ -2859,6 +2862,294 @@ namespace
             "invalid persistent settings remain untouched for diagnosis");
         std::cout << "Persistent face fixtures: " << root.string() << '\n';
     }
+
+    void PhotoEffectPreferences()
+    {
+        PhotoEffectSettings settings;
+        Require(ValidPhotoEffectSettings(settings) && !settings.enabled &&
+            settings.type == PhotoEffectType::LuminousMotes && settings.density == 2.0F &&
+            settings.size == 1.0F && settings.spread == 1.0F && settings.verticalOffset == 0.0F &&
+            settings.opacity == 1.0F && settings.brightness == 1.0F &&
+            settings.motionPreset == PhotoEffectMotionPreset::Gentle && settings.motionSpeed == 0.70F &&
+            settings.verticalMovement == 0.22F && settings.floatiness == 0.68F &&
+            settings.lifetime == 1.0F && !settings.orbit && settings.orbitDirection == 1,
+            "photo effect defaults are sparkle, valid, moderate and disabled");
+        settings.enabled = true;
+        settings.type = PhotoEffectType::SakuraPetals;
+        settings.density = kPhotoEffectDensityMax;
+        settings.size = kParticleSizeMax;
+        settings.spread = kParticleFieldSpreadMax;
+        settings.verticalOffset = kParticleFieldVerticalMax;
+        settings.opacity = kPhotoEffectOpacityMax;
+        settings.brightness = kPhotoEffectBrightnessMax;
+        settings.motionSpeed = kPhotoEffectMotionSpeedMax;
+        settings.verticalMovement = kPhotoEffectFlowMax;
+        settings.horizontalFlow = kPhotoEffectHorizontalFlowMax;
+        settings.floatiness = kPhotoEffectFloatinessMax;
+        settings.sway = kPhotoEffectSwayMax;
+        settings.randomness = kPhotoEffectRandomnessMax;
+        settings.lifetime = kPhotoEffectLifetimeMax;
+        Require(ValidPhotoEffectSettings(settings), "photo effect upper bounds are valid");
+        settings.density = kPhotoEffectDensityMax + 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "photo effect density rejects out-of-range values");
+        settings.density = 2.0F;
+        settings.type = static_cast<PhotoEffectType>(kPhotoEffectTypeMax + 1);
+        Require(!ValidPhotoEffectSettings(settings), "photo effect type rejects out-of-range values");
+        settings.type = PhotoEffectType::MagicStars;
+        Require(ValidPhotoEffectSettings(settings), "magic stars are a valid third photo effect type");
+        settings.type = PhotoEffectType::AutumnLeaves;
+        Require(ValidPhotoEffectSettings(settings), "autumn leaves are a valid fourth photo effect type");
+        settings.type = PhotoEffectType::WhiteFeathers;
+        Require(ValidPhotoEffectSettings(settings), "white feathers are a valid fifth photo effect type");
+        settings.type = PhotoEffectType::PopStars;
+        Require(ValidPhotoEffectSettings(settings), "pop stars are a valid sixth photo effect type");
+        settings.type = PhotoEffectType::BlackFeathers;
+        Require(ValidPhotoEffectSettings(settings), "black feathers are a valid seventh photo effect type");
+        settings.type = PhotoEffectType::SnowCrystals;
+        Require(ValidPhotoEffectSettings(settings), "snow crystals are a valid eighth photo effect type");
+        Require(kPhotoEffectDisplayOrder == std::array<PhotoEffectType, 8>{
+                PhotoEffectType::LuminousMotes, PhotoEffectType::SakuraPetals,
+                PhotoEffectType::MagicStars, PhotoEffectType::PopStars,
+                PhotoEffectType::AutumnLeaves, PhotoEffectType::WhiteFeathers,
+                PhotoEffectType::BlackFeathers, PhotoEffectType::SnowCrystals},
+            "effect UI keeps Stars pairs and Feather pairs adjacent without renumbering types");
+        for (int index = 0; index < static_cast<int>(kPhotoEffectDisplayOrder.size()); ++index) {
+            Require(PhotoEffectDisplayIndex(PhotoEffectTypeFromDisplayIndex(index)) == index,
+                "effect display order maps both ways");
+        }
+        settings.type = PhotoEffectType::LuminousMotes;
+        settings.size = std::numeric_limits<float>::quiet_NaN();
+        Require(!ValidPhotoEffectSettings(settings), "photo effect rejects nonfinite values");
+        settings = {};
+        settings.density = std::numeric_limits<float>::quiet_NaN();
+        Require(!ValidPhotoEffectSettings(settings), "photo effect rejects nonfinite density");
+        settings = {};
+        settings.spread = kParticleFieldSpreadMax + 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "photo effect spread rejects out-of-range values independently of particle size");
+
+        settings = {};
+        settings.opacity = kPhotoEffectOpacityMin - 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "photo effect opacity rejects values below the live material range");
+        settings = {};
+        settings.brightness = kPhotoEffectBrightnessMax + 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "photo effect brightness rejects values above the live material range");
+        settings = {};
+        settings.opacity = std::numeric_limits<float>::quiet_NaN();
+        Require(!ValidPhotoEffectSettings(settings), "photo effect rejects nonfinite opacity");
+        settings = {};
+        settings.brightness = std::numeric_limits<float>::quiet_NaN();
+        Require(!ValidPhotoEffectSettings(settings), "photo effect rejects nonfinite brightness");
+
+        Require(std::abs(PhotoEffectCompositeStrength(1.0F, 1.0F) - 1.0F) < 0.0001F &&
+            std::abs(PhotoEffectCompositeStrength(0.25F, 4.0F) - 1.0F) < 0.0001F &&
+            std::abs(PhotoEffectCompositeStrength(0.50F, 1.0F) - 0.50F) < 0.0001F,
+            "opacity and brightness remain independent while offering compensating headroom");
+        Require(std::abs(PhotoEffectMaterialBrightnessScale(1.0F, 1.0F) - 1.0F) < 0.0001F &&
+            std::abs(PhotoEffectMaterialBrightnessScale(0.25F, 1.0F) - 4.0F) < 0.0001F &&
+            std::abs(PhotoEffectMaterialBrightnessScale(0.25F, 4.0F) - 16.0F) < 0.0001F &&
+            std::abs(PhotoEffectMaterialBrightnessScale(1.0F, 4.0F) - 4.0F) < 0.0001F,
+            "runtime cancels one extra effect-shader alpha factor without changing full-opacity brightness");
+        const auto whiteTint = PhotoEffectTint(PhotoEffectType::WhiteFeathers);
+        const auto blackTint = PhotoEffectTint(PhotoEffectType::BlackFeathers);
+        const auto blackFallbackTint = BlackFeatherFallbackTint();
+        Require(IsFeatherPhotoEffect(PhotoEffectType::WhiteFeathers) &&
+            IsFeatherPhotoEffect(PhotoEffectType::BlackFeathers) &&
+            !IsFeatherPhotoEffect(PhotoEffectType::PopStars) &&
+            whiteTint.red == 1.0F && whiteTint.green == 1.0F && whiteTint.blue == 1.0F &&
+            std::abs(blackTint.red - 0.8832F) < 0.000001F &&
+            std::abs(blackTint.green - 0.892584F) < 0.000001F &&
+            std::abs(blackTint.blue - 0.874F) < 0.000001F &&
+            std::abs(blackFallbackTint.red - 0.105984F) < 0.000001F &&
+            std::abs(blackFallbackTint.green - 0.111573F) < 0.000001F &&
+            std::abs(blackFallbackTint.blue - 0.12236F) < 0.000001F &&
+            std::string_view{kBlackFeatherTexturePath} ==
+                "textures\\ScreenshotLightingAssistant\\effects\\black_feather_atlas.dds",
+            "black feathers compensate for the neutral shared NIF while retaining their dedicated atlas");
+        Require(IsFourIdentityPhotoEffect(PhotoEffectType::AutumnLeaves) &&
+            IsFourIdentityPhotoEffect(PhotoEffectType::WhiteFeathers) &&
+            IsFourIdentityPhotoEffect(PhotoEffectType::BlackFeathers) &&
+            IsFourIdentityPhotoEffect(PhotoEffectType::PopStars) &&
+            IsFourIdentityPhotoEffect(PhotoEffectType::SnowCrystals) &&
+            !IsFourIdentityPhotoEffect(PhotoEffectType::LuminousMotes),
+            "snow crystals use four fixed identity rows without changing existing families");
+
+        settings = {};
+        settings.horizontalFlow = kPhotoEffectHorizontalFlowMax + 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "photo effect rejects horizontal flow above the expanded range");
+
+        settings = {};
+        settings.type = PhotoEffectType::SnowCrystals;
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Gentle);
+        Require(settings.verticalOffset == 0.35F && settings.motionSpeed == 0.54F &&
+            settings.verticalMovement == -0.22F && settings.horizontalFlow == 0.03F &&
+            settings.floatiness == 0.72F && settings.sway == 0.20F &&
+            settings.randomness == 0.32F && settings.lifetime == 1.25F && !settings.orbit,
+            "gentle snow preset starts high and descends slowly without orbiting");
+
+        settings = {};
+        settings.type = PhotoEffectType::SakuraPetals;
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Gentle);
+        Require(settings.verticalMovement > 0.0F && settings.floatiness > 0.6F &&
+            settings.sway < 0.3F && settings.lifetime == 1.0F && !settings.orbit,
+            "gentle petal preset uses the normalized smooth motion baseline");
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Falling);
+        Require(!settings.orbit && settings.verticalOffset > 0.8F &&
+            settings.motionSpeed == 0.74F && settings.verticalMovement == -0.55F &&
+            settings.floatiness == 0.30F && settings.lifetime == 1.50F,
+            "falling preset matches the tested high, gently descending reference motion");
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Wind);
+        Require(settings.horizontalFlow > 0.7F && settings.randomness > 0.5F &&
+            !settings.orbit,
+            "wind preset emphasizes camera-relative horizontal drift and variation");
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Updraft);
+        Require(settings.verticalMovement > 0.8F && settings.lifetime == 1.25F,
+            "updraft preset sends petals upward and keeps them visible longer");
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Orbit);
+        Require(settings.orbit && settings.verticalMovement == 0.0F &&
+            settings.horizontalFlow == 0.0F &&
+            settings.motionPreset == PhotoEffectMotionPreset::Orbit &&
+            settings.orbitDirection == 1,
+            "orbit preset selects the dedicated character-centred mesh variant");
+        const auto retained = settings;
+        ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Custom);
+        Require(settings.motionPreset == PhotoEffectMotionPreset::Custom &&
+            settings.motionSpeed == retained.motionSpeed &&
+            settings.verticalMovement == retained.verticalMovement &&
+            settings.floatiness == retained.floatiness,
+            "custom marker retains detailed motion values");
+
+        Require(PhotoEffectLifetimeVariant(0.50F) == 0 &&
+            PhotoEffectLifetimeVariant(1.00F) == 2 &&
+            PhotoEffectLifetimeVariant(2.00F) == 6 &&
+            PhotoEffectLifetimeFromVariant(5) == 1.75F,
+            "particle lifetime maps to seven bounded mesh variants");
+
+        Require(PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 1.0F) == 4.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 2.0F) == 8.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 3.0F) == 14.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 1.5F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 2.5F) == 11.0F,
+            "sparkle density preserves all three old anchors and interpolates between them");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 2.5F) == 8.0F,
+            "petal density preserves all three old anchors and interpolates between them");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 2.5F) == 8.0F,
+            "star density uses the sparse visual anchors and continuous interpolation");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 2.5F) == 8.0F,
+            "autumn leaf density uses the sparse visual anchors and continuous interpolation");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 2.5F) == 8.0F,
+            "white feather density uses the sparse visual anchors and continuous interpolation");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::PopStars, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::PopStars, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::PopStars, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::PopStars, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::PopStars, 2.5F) == 8.0F,
+            "pop-star density uses the sparse visual anchors and continuous interpolation");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 2.5F) == 8.0F,
+            "black feather density matches the shared white-feather visual anchors");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 1.0F) == 3.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 2.0F) == 6.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 3.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 1.5F) == 4.5F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 2.5F) == 8.0F,
+            "snow crystal density uses the sparse visual anchors and continuous interpolation");
+        Require(PhotoEffectEmissionRate(PhotoEffectType::LuminousMotes, 0.0F) == 4.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SakuraPetals, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::MagicStars, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::AutumnLeaves, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::WhiteFeathers, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::PopStars, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::BlackFeathers, 4.0F) == 10.0F &&
+            PhotoEffectEmissionRate(PhotoEffectType::SnowCrystals, 4.0F) == 10.0F,
+            "emission rate remains bounded when called defensively");
+
+        Require(std::abs(0.50F * PhotoEffectSpreadCompensation(0.50F) - 1.0F) < 0.0001F &&
+            std::abs(1.00F * PhotoEffectSpreadCompensation(1.00F) - 1.0F) < 0.0001F &&
+            std::abs(2.00F * PhotoEffectSpreadCompensation(2.00F) - 1.0F) < 0.0001F &&
+            std::abs(4.00F * PhotoEffectSpreadCompensation(4.00F) - 1.0F) < 0.0001F,
+            "spread compensation keeps particle-system world scale at one in every field size");
+
+        settings = {};
+        const CameraBasis camera{{0.0F, 1.0F, 0.0F}, {1.0F, 0.0F, 0.0F}};
+        const auto first = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        const auto later = SamplePhotoEffectMotion(settings, camera, 2.0F);
+        Require(Finite(first.gravityAxis) && first.gravityStrength > 0.0F &&
+            first.turbulence > 0.0F && first.turbulenceScale > 0.0F,
+            "motion sampler produces finite gravity and turbulence");
+        Require(std::abs(first.gravityAxis.x - later.gravityAxis.x) < 0.0001F &&
+            std::abs(first.gravityAxis.y - later.gravityAxis.y) < 0.0001F &&
+            std::abs(first.gravityAxis.z - later.gravityAxis.z) < 0.0001F,
+            "gravity remains stable so particles do not change course in lockstep");
+        settings.horizontalFlow = 1.0F;
+        settings.verticalMovement = 0.0F;
+        settings.sway = 0.0F;
+        settings.randomness = 0.0F;
+        const auto rightward = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        Require(rightward.gravityAxis.x < -0.99F && std::abs(rightward.gravityAxis.y) < 0.001F &&
+            std::abs(rightward.gravityAxis.z) < 0.001F,
+            "positive camera-right movement is encoded as the opposite Skyrim gravity axis");
+        settings.horizontalFlow = 0.0F;
+        settings.verticalMovement = 1.0F;
+        const auto upward = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        settings.verticalMovement = -1.0F;
+        const auto downward = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        Require(upward.gravityAxis.z < -0.99F && downward.gravityAxis.z > 0.99F,
+            "signed vertical movement compensates Skyrim's inverted gravity-axis convention");
+        settings.orbit = true;
+        settings.verticalMovement = 1.0F;
+        const auto orbitUpward = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        settings.verticalMovement = -1.0F;
+        const auto orbitDownward = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        Require(orbitUpward.gravityAxis.z > 0.99F && orbitDownward.gravityAxis.z < -0.99F,
+            "target-local orbit meshes use their direct gravity axis without reversing vertical controls");
+        settings.orbit = false;
+        settings.motionSpeed = kPhotoEffectMotionSpeedMax;
+        settings.verticalMovement = 0.0F;
+        settings.horizontalFlow = kPhotoEffectHorizontalFlowMax;
+        const auto fastSideways = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        Require(fastSideways.gravityStrength > 14.0F,
+            "expanded speed and horizontal ranges exceed the previous force ceiling");
+        settings.horizontalFlow = 0.0F;
+        settings.verticalMovement = 0.0F;
+        const auto hovering = SamplePhotoEffectMotion(settings, camera, 0.0F);
+        Require(hovering.gravityStrength == 0.0F,
+            "zero vertical and horizontal movement produces a genuine hover");
+        settings.orbit = true;
+        settings.orbitDirection = 1;
+        const float clockwise = PhotoEffectOrbitAngle(settings, 1.0F);
+        settings.orbitDirection = -1;
+        const float counterclockwise = PhotoEffectOrbitAngle(settings, 1.0F);
+        Require(clockwise > 0.0F && counterclockwise < 0.0F &&
+            std::abs(clockwise + counterclockwise) < 0.0001F,
+            "runtime-local orbit angle advances continuously and reverses direction");
+        settings.orbit = false;
+        Require(PhotoEffectOrbitAngle(settings, 10.0F) == 0.0F,
+            "ordinary world-space particles do not receive root rotation");
+        settings.orbitDirection = 0;
+        Require(!ValidPhotoEffectSettings(settings), "orbit direction rejects zero");
+        settings.orbitDirection = 1;
+        settings.floatiness = kPhotoEffectFloatinessMax + 0.01F;
+        Require(!ValidPhotoEffectSettings(settings), "floatiness rejects out-of-range values");
+    }
 }
 
 int main()
@@ -2905,6 +3196,7 @@ int main()
         StorageMigration();
         TargetSelectionAndUniformDiagrams();
         PersistentFacePreferences();
+        PhotoEffectPreferences();
         std::cout << "PASS: " << checks << " lighting-state/layout/runtime-model checks\n";
         return 0;
     } catch (const std::exception& error) {

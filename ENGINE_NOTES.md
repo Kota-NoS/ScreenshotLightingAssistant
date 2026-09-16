@@ -1,258 +1,254 @@
-# 0.2.0 final — persistent player face light
-
-- Adds a fifth owned renderer slot for a player-only persistent face light. It remains a transient `NiPointLight`: no form, reference, ESP, Papyrus script or co-save record is created.
-- The persistent profile is file-backed (`persistent-face.sla`) and independent from photography scenes/history. Loading and cell/renderer transitions remove the owned light first; the 33ms worker requests a new one-shot game task only after runtime state becomes safe.
-- The final UI replaces the top-row `F` label with a vector-drawn person icon. Its hit target, active-state highlight and window-opening behavior remain separate from the photography face-light controls inside the circular diagram.
-- SKSE Menu Framework's dedicated input callback handles keyboard and gamepad assignment while its blocking menu is open; the normal `BSTEventSink<InputEvent*>` continues to handle gameplay toggles. Escape cancels either capture, and normal toggles are ignored while the game is paused or the console is open.
-- A separately stored gamepad button uses `ButtonEvent::HeldDuration()`. The 0.60-second threshold latches before checking paused gameplay, so one hold fires at most once and a hold begun in a paused menu cannot fire after that menu closes. Release or a new down-edge rearms the latch. Gameplay events are observed but not globally consumed, so the button's original Skyrim action is not suppressed.
-- Persistent settings format 3 adds a feature master flag. Strict format-1 and format-2 readers remain available; both migrate with the feature master enabled, and all older persistent camera-facing values normalize to head-facing placement. Writes use format 3.
-- The feature master gates persistent renderer ownership and both gameplay hotkeys without discarding the saved light state, values or bindings. Its OFF transition dirties the existing one-shot game-task pump so the owned light is retired on the game thread.
-- Player photography face light takes temporary ownership when enabled, preventing two face lights on the same actor. NPC photography can coexist with the persistent player slot.
-- Lighting, persistence, renderer teardown/recreate, visual ownership, in-menu capture, gamepad timing, the master gate, format-3 migration and the revised status UI all passed the in-game checklist. The beta4 feature code was promoted unchanged to 0.2.0 final.
-
-# 0.1.29 final — initial public release
-
-- `ResetCurrentValues` resets only manual-light intensity, range, distance, height, fine offsets and shadow bias to centralized defaults. Direction, recipe/tint, projection/castsShadow, enabled state, placement and face settings remain value-identical.
-- The action commits one history snapshot and no-ops without pruning redo when the selected slot is unplaced or its resettable fields already match defaults.
-- The responsive Settings heading keeps Reset values inline when measured widths fit and wraps it below at narrow widths.
-- The MSVC DLL build and 44,840 model/filesystem/layout/runtime checks pass. RC1 clean-install, persistence and migration checks and RC2 live reset/UI checks passed in game. The RC2 DLL is promoted unchanged to 0.1.29 final.
-
-# 0.1.29 RC1 — public packaging freeze (historical)
-
-- No runtime-light, preset, persistence, migration or UI-layout behavior changed from 0.1.28.
-- Version metadata and the user-visible storage footer were advanced to 0.1.29; startup logging is release-neutral.
-- Distribution attribution now targets alandtse/CommonLibSSE-NG v6.1.0 (`b1e0e03`) and carries its exceptions and original MIT notice alongside this project's GPL-3.0-or-later text.
-- The MO2 archive carries the optimized DLL but not its PDB. Symbols are packaged separately for crash analysis. Source is a third archive and includes the build recipe, tests and third-party notices.
-- RC1's clean MO2 install, restart persistence and legacy migration passed in game. The full 0.1.28 feature set was also exercised by the author.
-
-# 0.1.28 — Candle Space, virtual-Data storage and denser cards
-
-- The exact user-authored Candle Space SCENE 2 payload is now compile-time sample `candle_space`, including all three fine offsets and its included-but-disabled Head-basis face settings. It has localized display metadata and never creates a user registration.
-- A missing language preference now selects English. Existing valid preference files still win and are copied during the storage migration.
-- Mutable state prefers `<game>/Data/SKSE/Plugins/ScreenshotLightingAssistant`. MO2's USVFS should redirect those new writes to Overwrite. `PrepareStorageLocation` probes writability and falls back to the legacy SKSE-log root if necessary.
-- One-time migration copies regular files from legacy `Presets` (including Archived) plus `ui-language.sla`, never overwrites a destination file, never follows symlinks and never deletes the legacy copy. A valid `storage-v2.sla` marker suppresses repeat import so archived/deleted entries cannot reappear from the old tree.
-- Card font size and two-line title capacity are unchanged. Horizontal diagrams are 144–168 px instead of 160–184 px; padding, gaps, camera reserve and label-row padding shrink together. The representative 440 px / 24 px-font three-light card is at least 11% shorter than 0.1.27.
-- 44,816 model/filesystem/layout checks pass and the CommonLibSSE-NG SE/AE DLL builds. USVFS routing and the resulting live gallery/lighting output still require in-game validation.
-
-# 0.1.27 — Compact preset guidance and save-independent registrations (historical)
-
-- Preset guidance no longer consumes its own row. It shares the first available section heading (Saved presets, otherwise Samples) when the localized text fits and is omitted at narrower widths.
-- This is a presentation-only change. Registered `.slalight` / `.slaset` files continue to live under the SKSE log directory and remain independent of Skyrim save games.
-
-# 0.1.26 — Head-facing initialization, authored rim samples and transient registration errors
-
-- FaceLightSettings now initializes with Head basis. This changes only a newly constructed scene; Camera remains selectable. SCENE 1 decode and face-excluded serialization explicitly use Camera, preserving the legacy on-disk contract despite the new in-memory default.
-- The built-in sample table adds two authored value snapshots. Rim lighting Blue owns all three manual lights and an enabled Head-facing face fill; Rim lighting Warm owns only its three manual lights and preserves the current face value. The per-sample includeFace flag drives both picker application and card help/match behavior.
-- Built-in cards remain compile-time samples and never populate the user's Saved presets collection. The public English label normalizes the submitted “Worm” spelling to “Warm”; Japanese labels are 青色リムライト and 暖色リムライト.
-- Preset picker help is rendered as a separate wrapped row below the Manage/Keep open controls. The registration modal owns a transient error string cleared on every open and every name edit; startup storage-load diagnostics remain separately visible.
-- No runtime light ownership, game-task scheduling, hooks, target selection, filesystem format or saved-entry limit changed. Actual lighting and ImGui presentation remain game checks.
-- MSVC test build passes 44,634 checks covering the new default, legacy/excluded-face canonicalization, exact supplied rim values, per-sample face scope and bilingual names/descriptions. DLL metadata and exports are verified separately during packaging.
-
-# 0.1.25 — Face placement modes and shared action-row layout (historical)
-
-- FaceLightSettings appends a validated Camera/Head enum; default Camera retains the exact previous FaceLightPosition helper. SetFaceBasis commits pending numeric edits separately and stores a value-only scene in history. Equality, bookmarks and includeFace preset semantics cover the new field. Mode changes never enable lights or touch manual slots.
-- Head mode reads NPC Head [Head]'s current world.translate and world.rotate inside the existing game task. Forward is rotate * local +Y, up is rotate * local +Z. The humanoid reference convention was checked against [PyNifly's Skyrim skeleton XML fixture](https://raw.githubusercontent.com/BadDogSkyrim/PyNifly/main/tests/tests/Skyrim/skeleton_xml.hkx): the head chain is near identity in reference pose, NPCEyeBone translates about +8.10 on local Y and the head magic node about +11.54 on Y. This supports the reference humanoid convention, not a claim that every custom skeleton has identical axes.
-- Pure HeadFaceLightPosition normalizes and checks finite, nonzero, approximately orthogonal axes. Placement is head + forward * 0.45m + up * heightOffset. Skeleton scale does not multiply metre offsets. Head yaw/pitch/roll all apply; actor root yaw is not substituted for head orientation. This is a shadowless point fill, not a spotlight aiming change.
-- Missing head or unusable orientation suppresses only face fill while a valid session continues. Camera mode retains the <0.10m head/camera guard. Head mode has no face-specific camera-distance input, but shared start/camera/scene/cell availability gates remain unchanged. No skeleton writes, stored bone pointers, extra hooks, threads or new ownership paths.
-- Saved scenes accept SCENE 1 and 2. SCENE 1 implies Camera. Encode stays byte-compatible with SCENE 1 for camera or excluded-face entries; only included Head requires SCENE 2 and an extra validated enum after the legacy face line. Old builds safely reject version 2 rather than silently place it camera-relative. Unknown/malformed files are preserved; valid entries still load. Saved lights and view metadata are unchanged.
-- Side-by-side UI puts the fine-position/trash row inside the left group, before ending it. ImGui reserves max(left with actions, right favorites), instead of max(left, right) plus actions. Favorite 5 can occupy the adjacent right-side space. Narrow layouts retain stacked groups and wrapped actions; no text shrinking or absolute positioning over the right column.
-- MSVC DLL build and 44,323 automated checks passed, including 7,800 additional assertions for combined yaw/pitch/roll geometry, finite bounds, translation, independent mode edits, history/bookmarks, session stop gates, v1/v2 exact round trips and mixed-format disk reload/rename. Camera helper unchanged versus 0.1.24. Actual skeletal transforms/illumination and ImGui interaction still need user game testing. No game deployment or public upload performed.
-
-# 0.1.21 — NPC subjects, presentation language and stable-entry renaming (historical)
-
-- Native runtime remains a single game-task pump. UI submits value-only epoch-stamped target commands. Nearby refresh uses TES::ForEachReferenceInRange only on explicit refresh/open, filters loaded attached humanoid skeletons in the player's cell/worldspace, sorts by distance/FormID, and exposes at most64 records. ActorHandles remain game-task-owned; UI sees names/distances/IDs and an opaque list revision, never engine pointers. No ESP, Papyrus, forced load, actor AI mutation or serialized actor identity.
-- Console and crosshair references resolve only inside a game task. Selection revalidates the handle and eligible loaded3D, then stops the session/increments its epoch, resets the camera basis, and clears owned lights. Lighting values are kept. Old UI frame tokens cannot restart lights. NPC loss or cell change stops without silently redirecting to another actor.
-- Lifecycle reset invalidates pending commands and clears the UI subject/list. Handles are cleared by the next game task; load/main-menu default is Player with lights off. Player and target cell IDs are both checked while running; both reset on new session epochs. Runtime::Anchor now accepts the selected Actor; existing chest/head/position fallback, face geometry, shadow creation and cleanup are otherwise retained.
-- Localization uses a static JP/EN table, presentation-only lookup, dual-language runtime status values and render-time history-action translation. User entry/NPC names are opaque and never machine-translated. Popup ### IDs are stable across language changes. Long tooltips wrap. Preference writes use a flushed same-directory temporary followed by atomic MoveFileEx; unknown/corrupt preference files are kept rather than overwritten.
-- Rename validates UTF-8/name/category uniqueness, compares the decoded current payload with the displayed entry, backs up original bytes, flushes a new payload, rechecks the original bytes, and atomically replaces the same filename. It preserves favorite/order references. Formatting-only edits are accepted; concurrent semantic edits are refused. This is not a universal transactional guarantee against external concurrent writers or storage failure. Backups retain the original filename in their suffix.
-- Built-in display order is {0,1,3,2}; persisted IDs and color values remain {White,Warm,Candle,Blue}. No serialization format migration.
-- Preset diagrams use the .19 140px canvas as the ratio reference. Ring, node, central target, digit limits, clustered badges, strokes and camera icon all scale together. The card reserves scaled camera height and retains .20 right-side title/legend and responsive columns.
-- Verified: release DLL build, tests build and33,492 checks. New tests cover exact rename backups/reload/favorites/order/duplicates/invalid names/external edit/write failures; bilingual lookup and formatting arguments, preference persistence/failure, opaque names/history invariance; bounded/sorted candidate views and stale revision checks; session stop-token behavior; uniform diagram ratios and camera reserve.
-- In-game verification remains required for engine target discovery/resolution, crosshair availability, skeleton variation, cell/loading transitions, actual illumination/shadow cleanup, translated ImGui layout and input. No game/MO2 deployment was performed.
-
-## Earlier implementation notes
-
-# Colour and saved presets trial 0.1.17 — implementation and verification boundary
-
-## 0.1.17
-
-- Appends optional value-owned RGB to LightSettings; fixed type indices and tints are unchanged. SetTint validates finite 0..1 channels, edits only the placed selected slot, and uses its own coalesced history field. ApplyLightRecipe sets only type/tint plus the established empty-slot placement/enable rule. Built-in type selection clears the custom override. Black is valid; diagram text uses contrast-enhanced colours while the picker button shows actual RGB.
-- RuntimeLight changes only the existing RuntimeTint call to accept LightSettings. The existing game-task diffuse update receives the override, without changing registration keys or creating extra lights. Face remains fixed white with unchanged 0.1.16 positioning/range/strength/ownership. No new hooks, game APIs, engine object persistence, or thread lifecycle changes.
-- A small palette popup has eight swatches plus ImGui ColorPicker3; the existing cross-window active-gesture flag covers picker drags. Registration buttons snapshot values at opening; names are UTF-8, max120bytes, rejecting control bytes/invalid UTF-8/ImGui ## IDs. Empty names get unique automatic display names. User entries are bounded to128/category. Long names have full hover text; the light list scrolls in a fixed-height child.
-- Removes Details. Shadow bias retains its name and actual meaning, shows immediately below Spot shadow mode only, and retains its values when hidden. Omni continues to use the same retained bias; the tooltip explicitly says this is not a blur control. Upper P and lower picker request exactly one shared modal gallery. Master button display text changes only.
-- PresetLibrary is engine-free and explicitly serializes all scalar scene fields in versioned, locale-independent text with max_digits10 float precision. .slalight stores only type/tint. .slaset stores all three slots, including muted/unplaced values, with an optional face snapshot (default unchecked). When face is excluded it is normalized on disk and current face is retained on apply. Presets do not store selection, Actor identity, handles, camera basis, or master running state. Each card owns values, not references to light registrations.
-- Registration storage is SKSE::log::log_directory()/ScreenshotLightingAssistant/Presets, separate from the game save and MO2 update folder. Startup reads valid entries but does not apply/start lights. Each save creates a unique same-directory .tmp via CREATE_NEW, writes/flushes/closes, and renames with MoveFileExW without REPLACE_EXISTING. No existing preset is overwritten, including duplicate display names. Failed writes do not publish a list entry; incomplete .tmp is retained but ignored. This protects file publication, not a universal guarantee against storage/hardware failure.
-- Parser rejects unknown versions, invalid fields, trailing data and files over64KiB. Bad files remain untouched and produce a visible warning; valid files still load. Directory errors retain the previous in-memory library. Right-click removal explicitly moves one resolved owned file into Archived using a new non-replacing name before removing its list entry. It does not edit current scene/history/other presets. Restoring a file from Archived then restarting recovers it. No bulk deletion, overwrite, automatic migration or game deployment.
-- UI snapshots/library operations happen in the existing UI callback/startup context, and only value scenes cross the existing mutex/epoch submission path. No engine pointers are retained by the library. File publication is synchronous and small; redirected/slow Documents storage may pause the save action. In-memory history/bookmarks remain session-only.
-- 19,303 assertions pass: existing18,456 retained plus847 colour/recipe, serialization and actual filesystem checks. Tests cover OFF and empty slots, all types/slots, independent face retention, one-gesture undo, exact custom RGB, invalid inputs, scene round trips, Unicode and escaped names, duplicate protection, fresh-instance reload, malformed files, write failure and recoverable archive/restore. Fixtures use new uniquely owned temp directories, never the user's real presets.
-- Build uses the same CommonLib source and SE+AE/non-VR flags as0.1.16, spdlog1.16 compiled static with /MD and std::format. An initial build used the wrong dependency-cache location, accidentally resolving header-only spdlog (Windows macro pollution); returning to the verified prior compiled cache resolves it without dependency/game-code changes. No header-only workaround remains.
-- The native DLL compiles, but live palette drag/IME, popup positioning, registration-list scrolling and actual game restart/reapplication require user testing. No screenshot rendering/input verification is claimed. Earlier sections below describe historical iterations and their then-current persistence limits.
-
-## 0.1.16 (historical)
-
-## Scope
-
-Three manual lights plus one independently owned face fill, player target only. The three manual slots accept four fixed colours. UI start/submit pass one validated Scene snapshot, never just the selected slot. Built-in scene cards replace the three manual settings including empty and muted slots, retaining face settings. Full snapshots in history/bookmarks include face. There is no user-preset persistence yet; future saving should allow an absent display name and later renaming.
-
-## 0.1.16 face elevation and strength
-
-- User confirmed 0.1.15 radius input, but reported question marks in two tooltips and wanted frontal/slightly elevated light with more strength available. The offending strings contained circled digits; replace both with ASCII-numbered ライト1/2/3, without altering global fonts or vendor code.
-- Source already uses the head bone, not the normal three-light chest anchor. The old full-3D head-to-camera offset could lower the fill with a low camera. Preserve its XY components, but replace elevation with head.z + heightOffset * unitsPerMetre. This is intentionally NOT an additive offset to the old camera-dependent elevation. Zero means head level, not the entire 0.1.15 position.
-- The XY projection remains continuous for exactly overhead/underhead cameras, tending to zero without an arbitrary horizontal-axis fallback. Existing nonfinite and <.10m head-camera guards remain face-only. Maximum .45m/half separation describes the pre-projection camera vector; total 3D head-light distance now also includes independent height, and need not satisfy that old bound.
-- FaceLightSettings appends heightOffset, default +.15m and valid -.50..+.50m, including while OFF. Existing aggregate initializers take the new default. SetFaceHeight has an independent pending field/history label; whole-scene history/bookmarks and preset face retention include it. No save/disk serialization or migration.
-- Face strength now accepts 0..3.00, matching the manual slider cap; initial .35 and OFF are unchanged. Range remains .5..2.0m, default1.2m. No exposure compensation, light masks, colour or shadow changes.
-- The same popup adds one height slider under range. Main status labels its anchor explicitly as 3灯基準, while the face tooltip explains the head-relative height. The normal three slots/pad/layout are unchanged.
-- RuntimeLight passes snapshot.face.heightOffset into the pure geometry helper on the existing game task. Position and fade use existing live-update paths, with no registration replacement or new engine API. Four-slot ownership, epochs, stop/load cleanup and thread boundaries are unchanged.
-- 18,456 assertions pass (2,715 more than 0.1.15). Coverage includes independent/mixed height gestures, no-op redo, OFF/unplaced selection, finite bounds, whole-scene rejection, presets/bookmarks, all eight manual power masks, 3.0 strength, stop/load gates, and head/camera orbit/closeup/vertical geometry across five elevations. Geometry expectations deliberately changed for decoupled elevation; XY regression remains.
-- MSVC/xmake DLL, three SKSE exports, release CRT and version0.1.16.0 verified. Actual popup glyphs/input, skeletal head-origin variation, visual falloff and engine teardown still require in-game checks. Screenshot7 shows face OFF and manual Light1 ON at2.42; it is an appearance reference, not proof of the face light at its old maximum.
-
-## 0.1.15 adjustable face range (historical)
-
-- User confirmed 0.1.14 face illumination, blue and the wide-range action; the short-range fill also lit much of the visible upper body. Add one independent radius slider under strength in the same popup, not a new full settings window.
-- FaceLightSettings appends range, default 1.2m, validated/clamped to .5..2.0m. Existing two-value aggregate initializers retain the default. OFF scenes still validate it; NaN/infinity/out-of-range requests reject the entire snapshot atomically. There is no persistence migration because settings are not serialized.
-- SetFaceRange uses its own pending numeric field/history label. Range and strength are distinct gestures; global undo/redo/bookmarks include both. PresetPicker already retains the whole face settings object, so non-default range survives every preset. Manual colour/wide/position/reset/power/delete operations never touch it.
-- RuntimeSettings maps face.range into the existing LightSettings.range. RuntimeLight.cpp is UNCHANGED: the existing game task sets radius and attenuation, without replacing registrations when only range changes. No off-thread writes, hooks, engine APIs, ownership/lifecycle changes or extra scene nodes.
-- Fixed white/shadowless emission, initial OFF/.35 strength, head-to-current-camera positioning (maximum .45m), suppression for missing/near head, and normal three-light controls are unchanged. Narrower radius also changes illumination at the face; no automatic intensity/position compensation and no face-only mask.
-- 15,741 assertions pass (15,018 retained + 723 new) for radius defaults/bounds/nonfinite inputs, OFF/unplaced-slot editing, no-op redo, separate and mixed slider gestures, bookmarks/presets, all manual power masks, face-only minimum radius, runtime mapping/unchanged registration settings, whole-scene rejection and stop/loading token gates. MSVC DLL builds, version 0.1.15.0, three SKSE exports and release CRT are checked separately.
-- Actual 0.1.15 popup input and radius-dependent face/torso falloff remain in-game checks; model tests do not prove live renderer behaviour. The supplied 0.1.14 screenshots demonstrate the user's tested scene, not exhaustive lifecycle safety or every shader environment.
-
-## 0.1.14 colour, range and face fill (historical introduction)
-
-- The opener label is now 微調整; its window ID and compact geometry remain unchanged.
-- Blue appends type index 3. Existing indices/tints remain unchanged; runtime blue RGB is (.30,.55,1). These are authored fixed values, not calibrated colour temperature or equal-brightness claims. Type changes preserve all placed-slot values except colour, with no re-registration for colour-only edits.
-- 広域 changes only the selected placed light's range to 12m. It does not reset colour, power, fine/base placement, projection or shadow bias. It is a one-shot undoable edit, not a mutually exclusive light type or soft-shadow/area emitter mode. Measured width reserves label/button space; narrow rows wrap the button below.
-- Scene contains a manual `lights[3]` array and `FaceLightSettings face`. Its container facade iterates/indexes ONLY the manual array to preserve selection/diagram semantics. Equality/copy includes both. Entire scenes validate finite face intensity 0..1 even while OFF, before any editor/session acceptance.
-- Face power defaults false and intensity .35. Face edits neither place/select/mute a manual slot nor alter its settings. Face intensity uses a dedicated accessor/pending field; a gesture joins global history at release, with boundaries between face/manual/pad edits. Existing undo selection-restoration semantics remain unchanged. Built-in PresetPicker copies current face before applying manual values; full ApplyScene/bookmark/history still replaces the whole snapshot.
-- Two separate 32px diagram hit targets, immediately below the Actor circle, expose face ON/OFF and an intensity popup. No top-row slot or marker is reserved. They use the existing draw-list primitives (no font-icon dependency). The popup contributes to the same frame-wide active-numeric flag as main and floating controls, so its drag is not finalized every frame.
-- Runtime ownership expands from 3 to 4 slots; runtime index 3 (logged as Light 4, named ScreenshotLightingAssistant:Face) is not a selectable UI slot. RuntimeSettings maps it to fixed white, shadowless omni, range 1.2m. The manual position/spot math and frozen horizontal basis are unchanged. Face does not consume a shadow registration; its visibility still depends on the engine's local-light budget/shader environment.
-- On the existing game task, resolve the current head via `GetObjectByName("NPC Head [Head]")` and current `cameraRoot->world.translate`. Place fill toward the live camera in full 3D by min(.45m, half separation). Missing head, nonfinite values or separation <.10m suppress/retire only face rather than guessing a chest/feet origin. The existing shared session start/basis/scene availability gates still apply, including inability to start with an indeterminate horizontal basis.
-- This is a short-range fill, NOT a face-only mask: adjacent hair/clothes may be illuminated. Strength 0 retires it without changing the enabled setting. Normal colour/range controls and fine reset never modify face settings.
-- Existing Clear loops, ownsLight scans, epoch checks, scene/cell transitions, errors and stop/load gates cover all FOUR owned slots. Face-only illumination therefore keeps the worker's cleanup path armed. Head temporarily unavailable during a running session permits face to resume when valid again; session stop/load requires explicit restart. No new hooks, event sources, threads, lifecycle APIs, persistence, ESP, game INI changes or deployment.
-- 15,018 pure-model assertions pass, including retained regressions plus blue/range isolation, no-op undo/redo, face/manual mixed gesture history, bookmark restoration, preset retention, independent power masks and face-only operation, stop/loading/stale-epoch gates, invalid OFF-face requests, current-camera geometry and compact UI bounds. DLL builds with MSVC/xmake, release CRT, version 0.1.14.0 and the existing three SKSE exports.
-- The 0.1.13 compact layout was user-confirmed. Actual 0.1.14 input, face placement/brightness, simultaneous 3+face visibility, load/stop removal and render cost remain in-game checks. Neither a model gate nor an export check proves actual engine cleanup.
-
-## 0.1.13 compact UI (retained)
-
-- Main controls now own intensity, range, base distance, base height and shadow modes in that order. The nonmodal window owns only the existing fine-position pad and depth/horizontal/vertical sliders. The base sliders retain their labels, bounds and Editor operations. Camera alignment is exposed only in the main pane to reduce accidental rebasing.
-- Shared slot controls keep the 3px number/bulb gap and enlarge only the space between pairs. A pure measured row-width helper uses the same gaps for wrapping and initial window sizing.
-- The position opener sits at the bottom-left of the interactive diagram, alongside the centered camera icon. A pure footer helper reserves enough vertical room below the lowest node; exceptionally wide text falls below the icon. Non-interactive preset diagrams keep their original camera drawing and interaction behavior.
-- The fine reset label is shortened to `基準に戻す`; it still zeros only the current slot's fine offsets. Global undo/redo sits on the right of the same footer row, with a next-row fallback when too narrow. No reset or history semantics changed. Disabled/unplaced controls cannot block undo.
-- Initial dimensions reserve fewer rows and a shorter slider width while preserving measured labels, footer and selector widths. The stable ID changes to `###sla_fine_position` so the smaller first-use dimensions are not overridden by 0.1.12's stored geometry. Subsequent user movement/resizing remains preserved. Viewport clamping and scrolling remain supported.
-- 13,256 engine-free assertions passed: 12,701 retained plus 555 new checks for pair spacing, camera/button non-overlap and fallback, right-aligned footer wrapping, compact initial dimensions, and interleaved base/fine/reset/global-history isolation. MSVC DLL build passed. These checks do not render ImGui or verify actual mouse/focus routing.
-- LightingState, PositionPad, RuntimeModel, RuntimeLight, preset values and vendor bridge remain unchanged from 0.1.12. Both windows still render before the aggregate gesture finish and epoch-scoped Submit. No new engine APIs, hooks, persistence or runtime behavior.
-- The user supplied 0.1.12 window usage and screenshots; this layout follows their requested split. 0.1.13 layout and input still need in-game verification.
+# 0.3.0-alpha44 — neutral Star, Feather and Snow materials
 
-## Earlier 0.1.12 nonmodal position window (historical layout)
+- Magic Stars, White Feathers and Snow Crystals now use `BSEffectShaderProperty::baseColorScale = 1.00`, neutral-white emitter RGB and neutral-white `BSPSysSimpleColorModifier` RGB keys.
+- Their existing fade alpha keys remain respectively `0.00 / 0.94 / 0.00`, `0.00 / 0.92 / 0.00` and `0.00 / 0.86 / 0.00`. Shape, UV layout, motion, emission and lifetime data are unchanged.
+- White and Black Feathers share the same NIF. `PhotoEffectTint(BlackFeathers)` compensates for the removed shared-NIF attenuation so the dedicated black atlas retains approximately alpha43's peak RGB contribution.
+- Builder reload verification rejects non-neutral values for these three families and Sakura. Exactly 189 of 441 generated effect NIFs should differ from alpha43; all eight DDS assets must remain byte-identical.
 
-- `Begin/End` with a stable `###sla_position` ID provides one movable/resizable window alongside the Lighting page. Title includes the current slot and OFF state; `g_editor` is shared, not copied. Original slot/power controls remain; the window reuses them. It moves distance/height and the expanded fine-position controls out of Details. Details retains shadow bias. Position-only reset, compact global undo/redo, and session-wide camera alignment are available in the window.
-- Open/focus flags are UI-only. Closing the title-bar X never calls Stop, deletes a slot, changes power or resets position. Only the Lighting callback submits the floating window, so it is hidden when the host menu or selected page hides; its open flag is retained for return. No new framework window registration, input hook, renderer callback or independent pause lifecycle is introduced.
-- Both UI surfaces are rendered before one aggregate idle-gesture check and one epoch-scoped Scene Submit. The idle main pane must not finish a numeric gesture still active in the floating pad. Selection, undo/redo, preset changes, camera alignment, and explicit gestures finish pending changes through the existing editor boundaries. Hidden-page pending input finishes when rendering resumes or another edit begins. A normal Begin is always paired with End, including clipped/closed content.
-- Position controls reserve the longest measured label width for sliders. Initial dimensions use the current font/frame metrics, title/selector/footer and pad needs, and are clamped inside the viewport work area. The pure `PositionWindowLayout.h` helper prefers free space beside the host pane. `FirstUseEver` preserves user movement/resizing; subsequent size constraints keep dimensions bounded. A small screen or deliberately shortened window can scroll. Actual clipping/hover/drag/scroll and focus are in-game checks, not inferred from layout arithmetic alone.
-- 12,701 engine-free assertions passed: 11,551 retained plus 1,150 new layout and shared-editor transition checks. These cover viewport origins/sizes, font-dependent measured requirements, resize bounds, long pending gestures, cross-surface global history, selection/redo, muted edits and reset isolation. They do not synthesize ImGui input or run Skyrim. MSVC DLL build, export triad, release CRT, version and package hashes are checked separately.
-- LightingState, PositionPad, RuntimeModel, RuntimeLight and preset values are unchanged from 0.1.11. No new engine-facing API, persistence, game INI change or other-mod mutation. The user reported very good 0.1.11 pad sensitivity/usability and camera alignment. This version's separate window still needs their in-game verification.
+# 0.3.0-alpha43 — approved Sakura atlas and repaired poses
 
-## 0.1.11 camera-relative fine positioning (retained model)
+- The artist-edited `sakura_petal_atlas.png` is now the source of truth. Its corresponding packaged DDS is the exact BC7 UNORM asset used for the accepted in-game comparison.
+- The right silhouettes of atlas cells `(0,0)` and `(0,1)` were restored from the original sample. All eight visible alpha bounds remain inside their 256 x 256 UV cells, so filtering cannot sample a neighboring pose.
+- The NIF-side alpha42 material normalization remains unchanged. All 441 effect NIFs and the other seven effect textures are byte-identical to alpha42.
+- `prepare_effect_textures.py` validates every Sakura cell and preserves the hand-finished PNG instead of regenerating it from the older raw sample. Because Pillow does not encode BC7, its rebuild path emits a DXT5 fallback; release packaging uses the tested artist-exported BC7 DDS.
 
-- Each value-only LightSettings now owns zero-default `FinePosition {horizontal, vertical, depth}`, finite and bounded to ±1m. Scene application and runtime Start/Submit validate even unplaced or muted slots. There is no persistence format change because this prototype has no disk/save serialization.
-- `LightPosition` adds right*horizontal + frozen-camera-front*depth + world-up*vertical to the unchanged base direction/distance/height. Positive depth points toward the camera side. Camera pitch/roll do not affect the axes. Explicit camera alignment/start retain their existing session-wide behavior; merely moving the camera does not rebase.
-- Pad input and marker/grid drawing share `PadPixelsPerMetre`: (shorter dimension - 32px) / 2m. Grid steps are 0.5m on both axes. Clicking anywhere begins relative dragging with no jump; motion is applied only on consecutive frames for the same slot. Clamped incremental input reverses immediately at a limit. Wheel up subtracts 0.05m per unit from depth.
-- The vendored ImGui bridge exposes InvisibleButton, IsItemActive/Activated/Deactivated, IO MouseDelta/MouseWheel and `SetItemKeyOwner`. Wheel ownership is assigned while hovered/active without clearing shared IO or installing input hooks. Actual framework scroll routing still needs in-game confirmation, especially when entering the pad and scrolling in the same frame.
-- SetFinePosition atomically edits all axes through one pending history group. Sliders share this path. Activation boundaries finish a prior gesture; drag release commits; wheel edits group through 0.25s inactivity/hover exit. Other slot selection and existing operations finish pending changes on their original slot. Hidden-menu edits finish on resumption/next operation. In 0.1.12, the pad is always expanded inside the position window.
-- Reset clears only the current slot's fine offsets. It never resets base direction/distance/height, colour, shadow, fade or placement/mute. Base changes preserve fine offsets. Built-in scenes default to zero offsets; all Scene equality/history/bookmark/preset behavior includes these new fields automatically.
-- The main diagram remains a base-direction schematic. A cyan dot indicates any adjusted occupant; an always-visible selected-slot summary prevents hidden offsets being mistaken for base coordinates. Selection/cycling/context-menu movement remain 0.1.10 semantics.
-- Game-thread ownership, scheduler, removal and shadow creation parameters are unchanged. Positional previews do not recreate registrations. Spots aim from the displaced position. `AimPlacedSpotlight` handles only the newly reachable coincident-source/anchor singularity by borrowing the zero-offset base aim, not moving the source; nonfinite/overflow errors still fail closed. Close-to-anchor illumination is not promised because of cone/near clipping.
-- Build and 11,551 assertions passed (8,539 retained + 3,012 added). The new checks cover per-slot state, defaults, shared slider/pad values, coalescing/reset/no-op redo, bookmarks/presets, invalid scenes/requests, all eight directions with three camera bases and a 3×3×3 offset grid, displaced spotlight aim, coincidence, unchanged registration settings, aspect ratios and input bounds. They do not generate actual ImGui mouse events or execute Skyrim.
+# 0.3.0-alpha42 — neutral Sakura particle material
 
-## Earlier 0.1.10 interaction-only change
+- Sakura `BSEffectShaderProperty::baseColorScale` is restored from `0.82` to `1.00`. Runtime brightness `1.00` therefore uses the authored baseline instead of requiring approximately `1 / 0.82 = 1.22` to cancel the NIF attenuation.
+- Sakura emitter RGB and all three `BSPSysSimpleColorModifier` RGB keys are neutral white. Their alpha keys remain `0.00 / 0.92 / 0.00`, preserving the existing lifetime fade while removing the second pink multiplication over the atlas.
+- Builder reload verification now rejects any generated Sakura NIF whose base scale, emitter colour, or fade RGB/alpha differs from those invariants.
+- The alpha41 Sakura DDS is unchanged. Petal silhouettes, eight poses, motion, emission, lifetime variants, the other seven effects, lighting, UI and storage behavior are unchanged. Renderer confirmation is still required.
 
-- Renderer/session code, tint tables, shadow parameters and preset values are unchanged from 0.1.9.
-- `DirectionSelection` is a const query: only placed slots occupy nodes, including OFF and zero-intensity lights. If current selection is outside the group, return its lowest slot; otherwise cycle in slot order, wrapping and keeping a sole occupant selected.
-- Left-click uses `ActivateDirection`: occupied means select without changing the Scene; empty means `SetDirection` on the current slot. There is no last-input-mode flag.
-- Right-click uses the vendored framework's `BeginPopupContextItem` within each node's PushID/PopID scope. Only confirmed `MenuItem` calls `SetDirection` directly, retaining source selection and other light settings. Opening/dismissing the popup does not mutate the editor. Default InvisibleButton activation is left-button only.
-- Explicit movement changes direction only, not distance/height. Unplaced slots stage a direction without creating a light; the popup labels this separately. Already matching direction disables the move item.
-- Selection commits a pending numeric edit to its original slot first, but adds no separate selection history or redo truncation. Moves remain undoable. Invalid directions are no-ops.
-- Non-interactive preset card diagrams remain read-only drawings; they do not create node buttons/popups.
+# 0.3.0-alpha41 — lifted Sakura midtones with localized blush
 
-## Ownership and lifecycle
+- Alpha40 retained useful luminance contrast but its median RGB of approximately `(215, 205, 209)` was too dark and too neutral in-game.
+- `prepare_sakura_material()` now remaps luminance with `138 + 112 * pow(clamp((L - 95) / 160), 1.14)` and applies a restrained pink separation that is strongest in authored roots, veins and folds.
+- Target visible-pixel median RGB is approximately `(233, 211, 221)`, median luminance `216`, and luminance standard deviation `19`, between alpha39's flat bright result and alpha40's detailed but muted result.
+- PNG and decoded DXT5 alpha bytes remain identical to alpha40. Petal NIFs, eight poses, motion, all other effect assets, lighting, UI and storage behavior are unchanged.
 
-- `RuntimeModel.h` is engine-free: validated numeric settings, camera-relative geometry and epoch-scoped session requests. The same value snapshots feed undo/redo/bookmarks; none contain pointers or handles.
-- `RuntimeLight.cpp` allocates up to four `NiPointLight` instances (three manual plus face), sets position/radius/attenuation/fade and registers it using `ShadowSceneNode::AddLight`. It does not create a TESObjectLIGH/TESObjectREFR, attach to the actor's 3D, edit any form, write an ESP, or serialize into a save/co-save.
-- Each owned slot retains its point and BSLight registration. A shared NiPointer retains their owning scene, including while all lights are OFF, so a scene replacement still disarms. Removal sets fade to zero and culls the point before `RemoveLight(registration)`, then releases our ownership. Queued renderer removal may complete later; no global clear/reset of other mods' lights is called.
-- An owned process-lifetime worker sleeps 33ms and schedules at most one outstanding SKSE game task. It never reads game objects. The task resolves player/camera/cell fresh and performs engine access; no self-requeue from inside a draining SKSE task.
-- UI and lifecycle callbacks touch mutex-protected request state only; they never mutate the scene graph. No lock is held across engine API calls.
-- Pre-load, post-load (including failure), new game and main/loading menu boundaries invalidate the epoch and disarm the session. Old UI frames cannot submit or restart with a previous token. Tasks consume the latest request, and check the epoch again before/after applying it. An in-flight operation can finish during a boundary; the follow-up cleanup cancels it. This is not a claim of synchronous pre-load teardown.
-- Cell ID changes, missing/unattached player 3D/cell or a scene replacement halt rather than follow into a different location. Closing the framework itself does not halt photography lighting.
-- Process exit does not attempt scene destruction from DLL detach. The intentionally process-lifetime manager avoids invoking Skyrim allocators from CRT/static teardown; the OS reclaims its transient state. Hot DLL unloading is not supported.
+# 0.3.0-alpha40 — independent Sakura luminance and chroma
 
-## 0.1.9 changes and cleanup audit
+- Alpha39's white blend reduced visible-pixel luminance standard deviation from alpha38's `23.0` to `7.4`, leaving insufficient texture headroom before the effect shader and scene exposure clipped the petal to a flat value.
+- `prepare_sakura_material()` now sharpens source luminance lightly, remaps it with `110 + 138 * pow(clamp((L - 95) / 160), 1.18)`, then adds a small low-saturation blush derived from localized source red detail.
+- The resulting visible-pixel luminance standard deviation is approximately `22.8`, with median luminance approximately equal to alpha38, while chroma remains far below alpha38. Fully-transparent padding uses neutral RGB `(236, 236, 238)`.
+- PNG and decoded DXT5 alpha bytes remain identical to alpha39. Petal NIFs, eight poses, motion, all other effect assets, lighting, UI and storage behavior are unchanged.
 
-- New and preset shadowed lights default to Spot; shadowless fill states and all numeric strengths/positions remain unchanged. Omni is still selectable. No saved-file migration exists because this prototype has no persistence.
-- Session Start/Submit validate all three slots before accepting any changes, including fields of unplaced/muted slots. Epoch and alignment belong to the full lighting session, not to editor selection.
-- The game task first retires absent/muted/zero-strength slots and changed shadow registrations across the entire scene, then creates/updates desired lights. Unchanged other slots retain their points and registrations. Colour edits update diffuse without shadow re-registration.
-- `ClearSlot` sets that point's fade to zero and culls it, removes only its registration, then resets its pointers and cached settings/type. It recomputes `ownsLight` across all three slots, so removing Light 1 cannot stop cleanup work while Light 3 exists.
-- `Clear` loops all slots before releasing the shared scene. Every existing stop, epoch change, not-ready/blocked gate, stale-task guard and Halt path still calls this full cleanup. Failed creation, AddLight, kind verification or geometry in any slot halts the whole session and removes already-created siblings, not a silently partial scene.
-- Lifecycle callbacks still enqueue/flag game-thread work; no new off-thread engine calls, hook, global shadow tweak, ESP, asset or save record.
-- All spots use the same frozen camera basis and latest chest/head/fallback anchor. Per-light direction/distance/height determine distinct positions, then each spot aims at the common anchor.
-- Runtime diffuse RGB is authored fixed data: white (1,1,1), warm (1,.80,.53), candle (1,.60,.29). Ambient remains zero; fade remains the requested intensity. These are not Kelvin, photometric calibration, sRGB conversion claims or simulated flames. White preserves 0.1.8; UI schematic label colours are separate.
-- Status counts successful registrations (active/3 and number shadowed), not a guaranteed number of visible shadows. Logs include slot index for registration/removal and colour changes; no per-frame logging.
-- A clean build/model test does not verify real engine removal, simultaneous shadow budget, renderer thread safety or final visual quality. In-game transition checks remain required.
+# 0.3.0-alpha39 — opacity-aware Sakura white/blush distribution
 
-## Position and shadow
+- `prepare_sakura_material()` replaces global saturation expansion with an alpha-aware blend toward blush white `(255, 250, 252)`.
+- Original atlas RGB weight is `0.35 * (0.45 + 0.55 * opacity)`: opaque roots, veins and folds retain more authored variation, while translucent edges approach white and resist colored filtering rims.
+- PNG and decoded DXT5 alpha bytes remain identical to alpha38. Petal NIFs, eight poses, motion, all other effect assets, lighting, UI and storage behavior are unchanged.
 
-The engine adapter samples chest world position, then head, then player position + 1.2m as a reported fallback. Horizontal basis points from actor to camera and is frozen until explicit rebase. Camera roll and vertical pitch do not tilt the ring. Relative distances use approximately 70 game units per metre; values are a UI calibration rather than an engine physical-unit promise.
+# 0.3.0-alpha38 — pale Sakura-petal balance
 
-Shadow/projection toggling extinguishes/removes the previous registration and creates one with the requested `LIGHT_CREATE_PARAMS`. No vtable mutation, borrowed light form or global shadow setting. This is a change from the earlier conceptual plan to swap ESP light definitions: this transient-light prototype needs no such definitions. Registration is dynamic/never-fading, with no restricted node/lens flare. Shadow visibility remains subject to renderer limits and the installed lighting/shader environment.
+- `prepare_sakura_material()` reduces the alpha37 saturation expansion from 1.45 to 1.18, deliberately staying close to the alpha36 source while retaining a visible Sakura blush.
+- The same transform covers hidden RGB; PNG and decoded DXT5 alpha remain identical to alpha37.
+- Petal NIFs, eight poses, motion, all other effect assets, lighting, UI and storage behavior are unchanged.
 
-## Earlier 0.1.8 spotlight comparison (historical defaults)
+# 0.3.0-alpha37 — restrained Sakura-petal saturation
 
-The user's corrected comparison is: SAM shadow omni and hemisphere stripe; SAM shadow spotlight alone did not visibly stripe in the tested scene. An earlier spotlight test still had an omni light enabled. Ultra quality made the lines finer, not absent. Increasing the 0.1.7 bias failed the user's visual-quality goal. These are scene-specific observations, not proof of one global INI error or guaranteed spotlight quality.
+- `prepare_sakura_material()` runs immediately after the normal petal atlas preparation and expands color saturation by 1.45 while preserving the authored luminance structure.
+- The same transform covers hidden RGB so bilinear filtering cannot introduce a differently colored seam around translucent edges.
+- PNG and decoded DXT5 alpha coverage remain identical to alpha36. Petal NIFs, eight poses, motion and all other effect assets are unchanged.
 
-`ShadowProjection::{Omni,Spot}` is a validated, value-only per-slot field, default Omni. The three UI buttons atomically set shadow/projection; shadowless retains the prior projection value but its effective registration always uses shadowless omni. Existing colour, position, intensity, range, bias, mute/placement and selection are untouched. Undo/redo/bookmarks include the field; built-in samples retain Omni. Invalid enum values in any slot reject an entire scene/request, even if unplaced or shadows are off.
+# 0.3.0-alpha36 — white-feather tonal headroom
 
-Creation parameters:
+- The motion-preset note now explicitly begins with “A preset”.
+- `prepare_white_feather_material` expands the White-feather atlas's visible luminance range after its existing silhouette/pose preparation. A restrained cool-gray floor preserves shafts and vane structure while white highlights remain white.
+- The White atlas alpha channel and coverage remain byte-identical to alpha35. Hidden RGB in fully-transparent padding is neutralized to prevent the former pink value from entering filtered borders.
+- Black feathers are still derived before the White-only tone map, keeping their DDS byte-identical to alpha35. The other seven effect DDS assets, every NIF, runtime motion, controls, lighting, storage behavior and serialized formats are unchanged.
 
-| Comparison | shadowLight | FOV (radians) | falloff | nearDistance (game units) | depthBias |
-| --- | --- | --- | --- | --- | --- |
-| Shadowless | false | 2π | 1 | 5 | 1 (inactive) |
-| Shadow omni, baseline | true | 2π | 1 | 5 | retained user value |
-| Shadow spotlight | true | π/2 (90°) | 5 | 7.508994 | retained user value |
+# 0.3.0-alpha35 — explicit storage ownership and final UI trimming
 
-The spot cone/falloff/near parameters were observed in the winning WRShadowDirectional (Skyrim.esm|05D9B3) record selected by the installed SAM config. The winner was WindowShadowsUltimate.esp. They are reference values, not a runtime dependency: no forms, colours, fade values, SAM implementation, meshes, DLLs or assets were copied. The spotlight trial changes projection plus its associated cone parameters, not a rigorously isolated test of one engine scalar. Equal UI intensity/range does not promise equal perceived brightness or coverage.
+- A valid existing `storage-v2.sla` is opened through virtual Data and resolved with `GetFinalPathNameByHandleW`. Its physical parent becomes the storage root, allowing newly-created per-preset files and view metadata to remain in a dedicated MO2 output mod after the complete storage folder has been moved there.
+- Resolution is marker-gated. A same-named directory alone is not enough, and a marker-free install continues through virtual Data and MO2's normal Overwrite/configured-output behavior.
+- The persistent-face launcher toggles its window and cancels any in-menu keyboard/gamepad capture when closing. The Photo Effects brightness explanation is removed.
+- Effect assets, particle/runtime behavior, controls and serialized formats are unchanged from alpha34.
 
-`AimSpotlight(position, anchor)` constructs a finite, right-handed orthonormal frame: columns +X = forward, +Y = up, +Z = right. It rejects coincident/nonfinite targets and uses an alternate up axis near vertical. The adapter assigns explicit NiMatrix3 columns (the library's three-vector constructor takes rows), before Update and AddLight. It recalculates orientation toward the same chest/head/fallback anchor on each game task, but never changes the frozen horizontal placement basis. Omni/shadowless use identity rotation as before.
+# 0.3.0-alpha34 — photo-effect UI finish and lazy mutable storage
 
-Axis verification was a bounded read-only inspection of the installed 1.6.1170 engine's two code regions, not game-state mutation: BSShadowFrustumLight::UpdateCamera (Address Library vtable ID 255531, slot 0x10, RVA 0x151AC50) copies the dynamic point's world rotation directly into the shadow NiCamera's local rotation. NiCamera::WindowPointToRay (ID 70630, RVA 0xD2B650) uses world-rotation column 0 as forward, column 1 for vertical and column 2 for horizontal displacement. This establishes +X for this adapter; none of these addresses or inspection mechanisms enter the plugin. SE uses the existing CommonLib abstraction and still needs a runtime check.
+- The Photo Effects window is now a normal constrained, scrollable ImGui window instead of `AlwaysAutoResize`; its initial size is 420x650 and users can resize it within the main viewport.
+- Display order is mapped separately from `PhotoEffectType`, keeping Stars/Stars 2 and White/Black feathers adjacent without changing persisted numeric IDs.
+- P and the star launcher toggle their corresponding windows. The motion-preset note and density legend are shortened/removed.
+- `PrepareStorageLocation` performs no write probe, directory creation or marker write when no legacy data exists. Actual setting/preset writers remain responsible for creating parent directories. A real legacy migration still probes, imports without overwrite, and writes the one-time marker.
+- MO2 virtual Data cannot identify a writable physical source-mod directory; actual writes still route to Overwrite. Effect assets and runtime rendering are byte-identical to alpha33.
 
-Only effective creation changes trigger fade-zero/cull/remove/recreation; animated position/aim and ordinary strength/range changes do not. The same owned slot switches, with no second comparison light added. On registration, the adapter checks `IsShadowLight()`, then the shadow interface's `GetIsFrustumLight()` or `GetIsOmniLight()`; it halts and removes its registration if the kind does not match. It does not alter a shadow subclass. Logs report accepted kind and submitted parameters, not visual correctness. Other mods' lights must be disabled by the tester separately.
+# 0.3.0-alpha33 — complete dense-dendrite crop and exterior baseline
 
-## API verification references
+- The straight cutoff in the alpha32 screenshot identifies a second crop error rather than attenuation. The upper-left dense reference component reaches `y=592`, while its quadrant ended at `y=543`.
+- Both upper source regions now extend to 60% of the 1086px sheet (`y=652`). Their connected components end at `y=592` and `y=567`, leaving 60px and 85px of verified transparent margin. Generation fails if either component again approaches within eight pixels of the lower crop boundary.
+- No rotational union, symmetry reconstruction or shape redraw is applied; the selected photographic ice structure is retained.
+- All four Snow rows lift low/mid alpha from the alpha32 remap's `7 + 112*effective^1.16` (cap 118) to `10 + 164*effective^1.10` (cap 174), and shift visible RGB toward neutral white ice. This targets readable `1.00 / 1.00` output on blue-grey exterior backgrounds while retaining partial-alpha faces.
+- Atlas layout, Snow NIFs, motion, spawn ratios, earlier DDS assets, controls and lighting remain unchanged. Renderer confirmation is still required.
 
-### Earlier 0.1.7 controlled shadow-bias experiment
+# 0.3.0-alpha32 — complete compact-dendrite crop
 
-`LightSettings.shadowBias` defaults to 1.0 (the previous build's value). Five diagnostic buttons offer 0.5 / 1 / 2 / 4 / 8; these are not calibrated quality levels. Values are finite-validated in the editor, scene application and runtime request gate (0.5..8), and included in per-slot undo/redo/bookmarks. No persistence format is introduced. Built-in scene values retain the default 1.0. Type selection, mute and removal retain each slot's bias; applying a complete scene replaces it.
+- The alpha31 upper-right reference region ended at the source sheet's exact horizontal midpoint (`y=543`), but that connected crystal continued through `y=566`. Its downward primary branch was therefore truncated at the crop boundary.
+- Only that source region now extends to 60% of the sheet height. The connected-component bounds become complete without reaching the separate lower-right hex plate.
+- The reconstructed RGB/alpha treatment, atlas layout, target sizes, all Snow NIFs and every earlier DDS remain unchanged. Renderer confirmation is still required for the corrected tip.
 
-`LightRegistrationSettings::From` normalizes inactive bias to 1.0 when shadows are off. The engine adapter compares this value object to the last registered settings. Only a change in shadow mode or effective bias removes/recreates the owned point; ordinary frames do not re-register, and editing bias while shadows are off causes no re-registration. Recreation uses the existing fade-zero/cull/remove path and retains the frozen camera basis. It never mutates a borrowed BSLight, casts it to a shadow subclass, or writes renderer/global INI settings. OFF/deleted/unsupported lights still take the earlier cleanup path.
+# 0.3.0-alpha31 — selected clear-ice source and distinct families
 
-Only `LIGHT_CREATE_PARAMS.depthBias` changes in this experiment. The near distance remains 5 game units, FOV/falloff stay unchanged, and no automatic radius-dependent bias is guessed. Logs record the actual requested registration bias/near distance and current position/radius/intensity/distance/height. These logs prove submitted values, not their visual effect. UI buttons avoid continuously rebuilding shadow lights during a slider drag; rapid clicks may coalesce into the newest request before a game task runs. Each distinct click remains a history entry.
+- In-game alpha30 screenshots showed that its shared rounded rime language made all four families collapse into one six-lobed icon, while alpha around 92-172 made the broad surfaces read as milky sugar rather than clear ice.
+- The shipping atlas now crops the four connected crystals from `assets/reference/snow_crystal_material_reference.png`: dense dendrite, compact dendrite, open sparse dendrite and hexagonal plate. Generation specks are discarded with a connected-component pass.
+- Source luminance retains photographic veins and internal facets, but every visible and hidden RGB value is rebuilt in a neutral ice-blue range. Source alpha is remapped to 0-122; visible row means are roughly 69-84 instead of alpha30's 102-106, with no opaque pixels.
+- All eight columns in a row remain byte-identical. Snow NIFs and all seven prior DDS assets remain byte-identical to alpha30; renderer appearance still requires the alpha31 in-game checklist.
 
-The user reported stripe-like artifacts with shadow ON in 0.1.6; self-shadowing precision error is a hypothesis, not an established diagnosis. [Microsoft's shadow-map discussion](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/common-techniques-to-improve-shadow-depth-maps) describes acne, depth bias and the detached-shadow trade-off. The correct range and effectiveness in this Skyrim/shader environment remain an in-game experiment. Compare 1/2/4 with all other settings frozen before separately testing light range. No new dependencies, copied implementation or other-mod changes.
+# 0.3.0-alpha30 — frosted plate-body snow crystals
 
-Calls and layouts were checked against the project's existing local CommonLibSSE-NG checkout: NiPointLight.h, NiLight.h, ShadowSceneNode.h/.cpp, BSShaderManager.h, PlayerCamera.h/.cpp, NiAVObject.h and SKSE interfaces. No lineage, Address Library mapping, game hook or vendor header was replaced.
+- In-game alpha29 screenshots confirmed that the tiny low-alpha centre face vanished while the higher-alpha shafts survived, leaving a clean but unintended skeletal symbol.
+- `prepare_snow_crystal_atlas` now constructs broad tapered alpha bodies for every main and side branch, wide tip facets and centre plates, then layers low-contrast ridges and deterministic asymmetric rime grains over them. Visible RGB ranges from cool transparent ice to soft white-blue frost; no visible or hidden pixel uses black or purple.
+- The atlas remains uncompressed RGBA, and all eight columns in each row remain byte-identical. The Snow NIFs and every pre-alpha29 asset stay byte-identical to alpha29; renderer appearance still requires the alpha30 in-game checklist.
 
-For a primary-source comparison of the renderer registration/removal API, consulted [Light Placer's LightData.cpp](https://github.com/powerof3/LightPlacer/blob/master/src/LightData.cpp). Its methods likewise use NiPointLight, LIGHT_CREATE_PARAMS, AddLight and RemoveLight. No Light Placer implementation, assets or runtime dependency are included. Our lifecycle, UI bridge and positional math are independently implemented for this tool.
+# 0.3.0-alpha29 — translucent fixed-identity snow crystals
 
-## Verified vs. still owed
+- `prepare_snow_crystal_atlas` deterministically draws a 2048 x 1024 uncompressed RGBA atlas with four sixfold families: large dendritic, medium stellar, needle-like and small hexagonal. Fully transparent padding keeps an ice-blue hidden RGB so bilinear edges cannot sample black or unrelated colours.
+- The faint plate, frosted underlay, narrow ridge, branches and tips use separate partial-alpha levels. This suggests translucent ice without relying on scene refraction, while leaving the background genuinely transparent.
+- Each of the four particle systems is locked to one atlas row. All eight columns in a row are byte-identical, so the existing subtexture machinery cannot pulse, resize or morph a live crystal. Rotation remains independent in the NIF.
+- Snow adds 63 NIFs (three capacity tiers x normal/CW/CCW x seven lifetime variants), bringing the installer to 441 NIFs across seven mesh families. The previous 378 NIFs and seven DDS assets remain byte-identical. Renderer appearance still requires the alpha29 in-game checklist.
 
-- 0.1.10: 8,539 assertions pass, including 4,290 new diagram-selection/explicit-move checks across all eight nodes, occupant subsets, starting selections, powered/muted states, zero intensity, cycling, isolated moves, undo/redo/bookmarks, pending sliders, invalid nodes, deletion and unplaced staging. These do not synthesize actual ImGui pointer events; popup opening, cancellation and font/layout behavior need an in-game check.
-- 0.1.9: 4,249 retained assertions pass, including the retained single-light regressions, all 512 combinations of three-slot placement/mute/zero-strength, independent colours, atomic invalid requests in every slot, full-scene presets/undo/redo/bookmarks, standalone Light 3, all-slot lifecycle gates and geometry. The single-light cases wrap values in a full Scene only in the test helper; the runtime API has no legacy single-light overload.
-- Built with MSVC/xmake, release CRT, existing SE+AE configuration (not VR).
-- Earlier 0.1.8 had 1,997 passing assertions: the previous 849 state/layout/runtime-model checks plus 1,148 covering projection state/registration, no-op redo preservation, pending slider coalescing, per-slot isolation, unchanged numeric parameters, undo/redo/bookmarks, muted/deleted/type behavior, invalid scenes/requests, lifecycle tokens, and aim over all eight ring directions, three camera bases, distance/height bounds, vertical fallback, nonfinite/coincident/overflow rejection and orthonormality/handedness.
-- DLL exports and file version checked separately. Build and pure-model tests do not execute Skyrim's renderer or assert actual engine cleanup.
-- User reports confirm visible white light and the tested controls in 0.1.6, not exhaustive lifecycle safety. 0.1.7 bias was not a satisfactory visual fix. The user reported good 0.1.8 spotlight appearance in the supplied scene, while larger-radius omni mostly hid shadows rather than fixing stripes. The user reported good operation and appearance in 0.1.9, including colour and ON/OFF controls, and successful 0.1.10 node selection/context-menu movement/stack cycling. This is not an exhaustive lifecycle/stability test. The user also reported excellent 0.1.11 pad usability and camera alignment, and supplied 0.1.12 separate-window usage/screenshots. The user has since reported excellent 0.1.13 compact-window usability. The user has confirmed 0.1.14 face/blue/wide operation in the supplied scene; 0.1.15 radius input was also user-confirmed; 0.1.16 height input/appearance remain unverified in-game. Also still owed: comprehensive paused-menu/tfc 1 task delivery, skeleton variants, load/main-menu/new-game/cell transitions, game exit, save/reload with the DLL absent, Community Shaders/ReShade coexistence and CPU/render cost.
-- If a paused mode does not drain game tasks, status can stay at start/stop waiting until it resumes. Do not replace game-task marshalling with off-thread mutation to conceal that issue; investigate the game update integration next.
+# 0.3.0-alpha28 — black-at-1.00 feather tone map
 
-## Manual safety checks
+- In-game alpha27 screenshots showed that brightness 1.00 still read as silver, while 0.26-0.36 produced the intended black-feather appearance. The deterministic remap now uses `5 + 65 * n^3.2` instead of `8 + 180 * n^3.2`.
+- On the source atlas this changes visible median luminance from 63 to 25 and the peak from 188 to 70. About 5.46% of visible pixels remain at or above 64; none reaches the silver range at or above 128. Alpha remains byte-identical.
+- Runtime texture replacement, the fallback tint, all 378 packaged NIFs and the other six packaged DDS assets are unchanged. Renderer appearance still requires the alpha28 in-game checklist.
 
-Use a separate testing save; do not overwrite the main save. Start without shadows first. After ON/OFF, deletion and repeated start/stop, compare to the original scene with no extra illumination. While light is ON, load the same or another save and verify it remains off until explicit restart. Repeat via main menu and via indoor/outdoor transitions. Save to a new test slot while the light is ON, exit Skyrim, disable only this prototype and reload that test slot: there should be no extra light or new missing-ESP requirement. Test exit both with three active lights and after stopping. Specifically test 3 -> 2 preset changes, deletion/undo for Light 2/3, Light 3 alone, and stopping/loading with all three lit. Additionally test face alone and all 3 manual + face active, face OFF/zero intensity, camera closeups/orbits, temporary missing head, independent manual selection, preset retention and the face strength popup. Every stop/load/cell transition must remove all four. Other mods' lights are not cleanup targets. Preserve a crash log if any stage fails; do not repeatedly run a crashing path on a primary save.
+# 0.3.0-alpha27 — restrained black-feather highlights
 
-Diagnostics are in `Documents/My Games/Skyrim Special Edition/SKSE/ScreenshotLightingAssistant.log` (edition-specific path may differ). It records lifecycle invalidation, captured anchor/basis and registration/removal, not every animation tick. `skse64.log` establishes that the DLL loaded; our status confirms registration, not a visually verified screenshot.
+- In-game alpha26 screenshots showed that the dedicated atlas preserved detail but lifted too broad an area into pale silver at brightness 1.00. The deterministic remap now uses `8 + 180 * n^3.2` instead of `8 + 230 * n^2.8`.
+- On the source atlas this changes visible median luminance from 89 to 63, the peak from 238 to 188, and pixels at or above 128 from about 24% to about 13%. Deep black coverage and alpha remain unchanged.
+- Runtime texture replacement, the fallback tint, all 378 packaged NIFs and the other six packaged DDS assets are unchanged. Renderer appearance still requires the alpha27 in-game checklist.
+
+# 0.3.0-alpha26 — high-contrast black-feather texture on shared NIFs
+
+- `prepare_black_feather_atlas` derives a neutral grayscale atlas from the final White-feather PNG. It preserves the alpha channel exactly, applies a deterministic high-power luminance curve with light local sharpening, and replaces fully transparent padding RGB with neutral black.
+- Runtime still resolves both feather types to the same `white_feathers_*` NIFs. For `BlackFeathers` only, `BSShaderManager::GetTexture` loads `black_feather_atlas.dds` and replaces the cloned effect material's source texture; the material RGB tint stays identity so texture contrast is not compressed.
+- The installer remains at 378 NIFs and adds one DDS. Renderer appearance and cross-runtime texture replacement still require the alpha26 in-game checklist.
+
+# 0.3.0-alpha25 — black feathers through shared white-feather assets
+
+- `PhotoEffectType::BlackFeathers` is appended as numeric value 6, preserving the serialized values of all six existing types.
+- Both feather types resolve to the same `white_feathers_*` NIFs and the same four particle-system and emitter names. The installer therefore remains at 378 NIFs and adds no black-feather DDS.
+- Runtime captures each cloned shader's authored RGB and brightness scale. It restores authored RGB for all existing effects, while Black feathers multiply it by the neutral graphite tint `(0.12, 0.125, 0.14)` before applying the existing opacity and brightness compensation.
+- The tint is per cloned material instance and a type change respawns the effect, preventing black state from leaking into White feathers. Renderer appearance still requires the alpha25 in-game checklist.
+
+# 0.3.0-alpha24 — directional long-feather vane separation
+
+- `prepare_effect_textures.py` now applies deterministic, supersampled alpha cuts only to row 2 of the four-row white-feather atlas. Six sparse cuts follow the long-feather length with per-frame offsets and asymmetric side selection; broad views also receive a shallow split tip.
+- The processor only subtracts alpha, rejects empty or excessive edits, and caps removed coverage at 5.5%. Narrow edge-on frames receive reduced cut depth and no tip split.
+- Rows 1, 3 and 4, all RGB detail, the 2048 x 1024 BC3/DXT5 atlas contract, and all 63 white-feather NIFs remain unchanged. Renderer appearance still requires the alpha24 in-game checklist.
+
+# 0.3.0-alpha23 — clean Stars 2 edges and UI naming
+
+- The UI label is now `星2` / `Stars 2`. `PhotoEffectType::PopStars`, numeric serialization, `pop_stars` paths and all runtime node names remain unchanged so alpha22 settings and ParticleWind exclusions continue to resolve.
+- `pop_star_atlas.dds` is now uncompressed 32-bit RGBA rather than BC3/DXT5. This removes shared 4 x 4 colour endpoints that could appear as unrelated coloured blocks on a highly magnified flat-colour silhouette.
+- Every transparent texel in each atlas row carries that row's flat RGB colour while retaining alpha zero. Bilinear samples at visible edges and the hollow centre therefore stay hue-consistent.
+- The atlas geometry, alpha coverage, four RGB values, four rows, eight fixed frames and the complete 378-NIF mapping are unchanged. Renderer appearance still requires the alpha23 in-game checklist.
+
+# 0.3.0-alpha22 — fixed-size Pop stars with a clearer flat palette
+
+- The four Pop-star atlas rows now use exact flat RGBA treatments: hollow bright yellow `(255,255,102)`, coral pink `(220,120,133)`, warm pale yellow `(251,240,122)` and sky blue `(153,204,255)`.
+- Row 0 is drawn as a true alpha hole rather than a white-filled centre. All eight frames in every row are identical in scale and opacity, eliminating the alpha21 Pop-star pulse while retaining row identity, independent birth time, movement and rotation.
+- `PopStars` still uses four particle systems and the same 4 x 8 atlas layout, so the 378-NIF runtime map and ParticleWind exclusions are unchanged. Luminous-mote twinkling is unchanged.
+- Renderer appearance still requires the alpha22 in-game checklist.
+
+# 0.3.0-alpha21 — asynchronous twinkle and flat pop stars
+
+- Luminous motes now use an eight-frame horizontal atlas. `BSPSysSubTexModifier` randomizes both the starting frame and loop phase so each live particle softly changes size and alpha on its own timing; the dimmest frame remains visible to avoid a field-wide blackout.
+- `PopStars` is a sixth `PhotoEffectType`, mapped to `pop_stars`. Four internal particle systems lock each particle to one atlas row: sky-blue outline/white center, coral pink, pale lemon and pale aqua. Frames within a row only pulse size and alpha, so a star cannot morph into another colour treatment.
+- The shipping atlas is deterministically redrawn from the original generated design direction. It contains genuine alpha and flat project-authored colour blocks; no stock-reference pixels, watermark or checkerboard are included.
+- Pop stars inherit the existing live density, particle-size, spread, opacity, brightness, vertical-position and motion controls. Normal variants remain in world space; orbit variants remain target-local. ParticleWind NG exclusions name all four systems.
+- Six types x three capacity tiers x three motion spaces x seven lifetime steps produce 378 packaged NIF variants. Renderer appearance still requires the alpha21 in-game checklist.
+
+# 0.3.0-alpha20 — compensate the extra effect-shader alpha factor
+
+- Alpha19 wrote the requested value to `BSEffectShaderMaterial::baseColor.alpha` and multiplied the authored `baseColorScale` by Brightness. In-game comparison shows the effect-shader/source-alpha path attenuates low opacity once more than the UI's simple product model predicts.
+- Runtime now applies `authoredBaseColorScale * (brightness / opacity)` while leaving `baseColor.alpha` at the requested value. This cancels one internal alpha factor: the intended post-blend contribution remains approximately `opacity * brightness`, while coverage and soft edges still use the requested opacity.
+- At full opacity the divisor is one, so the alpha19 1.00 baseline and 0.25-4.00 Brightness response are unchanged. At minimum opacity the internal scale can reach 16 only for the explicit 0.25 x 4.00 setting.
+- The helper is clamped to the existing slider ranges and unit-tested independently. No NIF, texture, shader flags, particle lifecycle or transform is changed. The exact result still requires the alpha20 in-game checklist because ENB/Community Shaders, fog, exposure and bloom remain downstream.
+
+# 0.3.0-alpha19 — independent live opacity and brightness
+
+- Each discovered `NiParticleSystem` now retains its `BSEffectShaderProperty` and the material's authored `baseColorScale` as runtime-only state.
+- Opacity writes `BSEffectShaderMaterial::baseColor.alpha`; brightness multiplies the captured authored `baseColorScale`. This preserves the different calibrated brightness of motes, petals, stars, leaves and feathers instead of flattening them to one absolute value.
+- Both values are written to existing systems on the regular game-thread update path. They do not rebuild the particle field, change emission, reset subtexture animation or transform particle positions.
+- Ranges are deliberately independent: opacity 0.25-1.00 and brightness 0.25-4.00. The product is only an approximate visual-strength guide because the renderer, ENB/Community Shaders, fog and exposure remain downstream.
+- No NIF or texture rebuild is required. Compile-time and unit checks cannot prove renderer response; use the alpha19 in-game checklist.
+
+# 0.3.0-alpha18 — exterior-safe live particle sizing
+
+- Alpha17 scaled each `NiParticleSystem` by `size / spread`. For world-space systems this also transforms stored particle positions; the large coordinates used by exterior cells can therefore move live particles out of view when size changes.
+- Runtime now keeps the particle-system world scale at one by using `1 / spread` below the scaled emitter node, and writes the requested size to every `NiPSysData::sizes` slot.
+- Existing and newly emitted billboards receive the same multiplier without changing their world positions. Spread remains isolated to the emitter node.
+- This is a runtime-only change. NIFs, textures, shader flags, motion values, effect identities and all lighting paths are unchanged. In-game verification is required because the order of Skyrim's particle update and the SKSE game task is runtime behavior.
+
+# 0.3.0-alpha17 — original identity-preserving white feathers
+
+- `PhotoEffectType::WhiteFeathers` is the fifth independent effect type and keeps all earlier numeric values unchanged.
+- Four particle systems each own one row of a project-specific 8x4 transparent atlas: small down, long flight, curved and decorative plume. The looping subtexture modifier stays inside that row, preserving identity while showing front, oblique, edge-on and back views.
+- Runtime discovery, continuous emission rate, particle-size/spread compensation, gravity motion, orbit and cleanup treat the four systems as one logical effect.
+- The source image was generated specifically for this project and normalized by `tools/prepare_effect_textures.py`; the user's stock-site image was not copied. ParticleWind NG compatibility names the four feather systems.
+- Five visuals, three capacity tiers, normal/clockwise/counterclockwise motion and seven lifetime steps produce 315 packaged NIFs. Structural checks cannot prove final appearance; use the alpha17 in-game checklist.
+
+# 0.3.0-alpha16 — fixed leaf identity with out-of-plane tumble
+
+- Autumn leaves now use four particle systems, one for each leaf identity. Every system owns one row of a project-specific 8x4 atlas; all eight cells in that row depict front, oblique, edge-on and back views of the same leaf.
+- A looping `BSPSysSubTexModifier` advances only within the owning row. This restores the visible tumble variation the user liked without allowing a maple leaf to become a rounded, narrow or curled leaf during its lifetime.
+- Runtime emission-rate, particle-size, spread and gravity updates treat the four systems as one logical effect and divide the requested total emission rate evenly between them. Petal behavior is unchanged.
+- ParticleWind NG compatibility names the four leaf systems. Structural inspection verifies four systems, eight offsets per system, a single atlas row per system and the authored tumble-frame fields. Final appearance still requires the alpha16 in-game checklist.
+
+# 0.3.0-alpha15 — fixed leaf identity
+
+- Autumn leaves now use eight particle systems inside each NIF. Each system owns one atlas offset and a one-frame `BSPSysSubTexModifier`, so an emitted leaf cannot advance into another silhouette.
+- Runtime discovery, emission-rate updates, particle-size compensation and gravity motion now operate on all eight leaf systems as one logical photo effect. The requested total leaf emission rate is divided evenly among them.
+- Petals retain the existing eight-frame flipbook modifier. ParticleWind NG compatibility names all eight leaf systems separately.
+- Structural inspection verifies eight leaf systems, one atlas cell per system and fixed frame fields. In-game rendering still requires the alpha15 checklist.
+
+# 0.3.0-alpha14 — autumn leaves and ParticleWind NG compatibility
+
+- `PhotoEffectType::AutumnLeaves` is a fourth independent effect type. It uses its own runtime mesh stem, particle-system/emitter names and Japanese/English UI strings without changing the existing three type values.
+- The project-specific 4x2 transparent leaf atlas contains eight yellow, orange and russet leaves. `tools/prepare_effect_textures.py` normalizes it into a 1024x512 DXT5 DDS; the NIF uses randomized atlas phase, rotation direction and rotation speed.
+- ParticleWind NG compatibility is declarative and optional: `SKSE/Plugins/ParticleWind/SLA_NoWind.json` maps each exact SLA particle-system name to `0.0`. No ParticleWind DLL/API is linked or required.
+- Four visuals, three capacity tiers, normal/clockwise/counterclockwise motion and seven lifetime steps produce 252 packaged NIFs. Unit tests and NIF structural inspection cannot prove appearance or third-party config loading; use the alpha14 in-game checklist.
+
+# 0.3.0-alpha13 — original magic-star effect
+
+- `PhotoEffectType::MagicStars` is a third independent effect type. It uses its own runtime mesh stem, particle-system/emitter names and Japanese/English UI text while retaining the existing motion, cleanup and target-selection paths.
+- The source star image was generated specifically for this project, normalized into a transparent 256x256 DXT5 DDS by `tools/prepare_effect_textures.py`, and referenced as `textures\ScreenshotLightingAssistant\effects\magic_star.dds`. No ParticleFieldSE or other mod asset is copied.
+- `tools/sparkle_nif_builder/create_sparkle_nif.cpp` builds the star particle hierarchy with nifly. Nifly is used only as the NIF authoring library; the actual particle layout, shader values, rotation, color and texture reference are authored by this project.
+- Stars use randomized initial angles, spin directions and spin rates. Their density anchors are 3/6/10 particles per second, continuously interpolated by the same safe posed-float controller path introduced in alpha12.
+- Three visuals, three capacity tiers, normal/clockwise/counterclockwise motion and seven lifetime steps now produce 189 packaged NIFs. Unit tests and NIF structural inspection pass; final appearance and lifecycle still require the supplied in-game alpha13 checklist.
+
+# 0.3.0-alpha12 — continuous runtime emission rate
+
+- Density is a continuous 1.00–3.00 value. Piecewise interpolation preserves the previous Low, Standard and High anchors exactly: luminous motes use 4/8/14 particles per second and petals use 3/6/10.
+- Runtime always loads the matching high-capacity NIF for type, lifetime and orbit mode, then locates the authored posed `NiFloatInterpolator` through the particle system's `NiInterpController` and changes only its `floatValue`.
+- The lookup accepts only a posed float (`floatData == nullptr`) and never uses a guessed subclass layout or raw offset. If the expected controller is unavailable, the effect remains on the safe static high-density NIF and logs one bounded warning after the existing 30 attempts.
+- Density changes no longer recreate the particle field. Type, lifetime, orbit mode, direction and cell transitions retain their existing replacement and cleanup behavior. All scene-graph and controller writes remain on the existing one-shot game-task path.
+- Unit tests cover both effect-specific anchor rates, interpolation, bounds and the unchanged motion model. A clean build cannot prove Skyrim evaluates the edited interpolator live; the alpha12 checklist requires in-game verification and keeps alpha11 as the immediate rollback.
+
+# 0.3.0-alpha11 — independent emitter spread and particle scale
+
+- Target-local orbit meshes use the direct `NiPSysGravityModifier` axis, unlike the inverted world-space variants. Alpha11 selects the convention from `settings.orbit` so the signed vertical control remains consistent in both modes.
+- Fall from Above now uses the motion values selected in the user's reference video: speed 0.74, vertical -0.55, floatiness 0.30, high source offset 0.85m and lifetime 1.50x.
+- Density remains the same three prebuilt NIF tiers and is exposed as a bounded integer slider; this avoids multiplying the existing 126 verified mesh variants.
+- The particle hierarchy separates scale responsibilities: the emitter node receives field spread, while its child particle system receives `particleSize / spread`. The resulting particle-system world scale follows particle size while the emitter-node scale controls spawn coverage.
+- Scene-graph writes stay on the existing one-shot game-task path. Unit and DLL tests cannot prove how Skyrim renders the separated hierarchy for both world-space and orbit particles; the alpha11 checklist explicitly verifies this in game.
+
+# 0.3.0-alpha10 — corrected engine axis and expanded motion range
+
+- In-game alpha9 testing established that `NiPSysGravityModifier` moved particles opposite the axis written by the runtime. Alpha10 negates the requested vertical and camera-right vector before storing it, so positive UI values mean up/right and negative values mean down/left.
+- Horizontal movement expands from ±1.00 to ±2.00. With vertical movement at zero, the endpoints produce a pure camera-left or camera-right vector; combining both controls produces diagonals.
+- Motion speed expands from 2.00x to 4.00x and the runtime force ceiling rises from 14 to 36 so values above the old limit remain effective. Orbit uses the same wider speed range.
+- Preset values and the shared petal atlas/rotation system are unchanged. The corrected axis makes Fall from Above descend and Updraft rise without sacrificing the eight-frame petal appearance.
+- Unit/model and build checks cannot prove the final direction, high-speed visual stability or cleanup in Skyrim. The supplied alpha10 checklist requires those in-game checks.
+
+# 0.3.0-alpha9 — orthogonal particle motion controls
+
+- Motion presets are now ordinary combinations of vertical offset, speed, signed vertical movement, signed camera-relative horizontal movement, floatiness, sway, randomness, lifetime and optional orbit. Editing one of those values selects Custom.
+- Generated particles start with zero baked linear velocity. Runtime applies the requested signed force, so vertical 0 is a true hover, positive values rise and negative values fall. Floatiness independently softens acceleration without changing direction.
+- Fall from Above no longer depends on a dedicated high emitter mesh. Its preset places the shared field above the subject and requests negative vertical movement. Updraft uses the same field with positive movement, avoiding the previous near-stall caused by competing baked velocity and gravity.
+- The project-owned petal atlas, randomized subtexture phase and per-particle rotation remain common to every preset. Removing the dedicated fall mesh does not remove petal facing or rotation variation.
+- Clockwise and counterclockwise orbit variants retain target-local simulation and bounded runtime root rotation. Non-orbit particles remain world-space after emission while the source follows the subject.
+- Normal, clockwise and counterclockwise variants are generated for both types, three densities and seven lifetime steps: 126 NIFs in total. Lifetime, orbit mode or orbit direction changes recreate only the owned particle field; other controls update live.
+- Scene-graph changes remain on the existing one-shot game-task path. Unit/model, DLL and NIF-structure checks cannot establish final visual speed, direction or cleanup in Skyrim; the supplied alpha9 in-game checklist is required.

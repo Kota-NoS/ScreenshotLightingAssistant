@@ -53,6 +53,8 @@ namespace ScreenshotLightingAssistant::UI
         bool g_focusPositionWindow{ false };
         bool g_persistentFaceWindowOpen{ false };
         bool g_focusPersistentFaceWindow{ false };
+        bool g_photoEffectWindowOpen{ false };
+        bool g_focusPhotoEffectWindow{ false };
         SKSEMenuFramework::Model::InputEvent* g_frameworkInputEvent{};
         std::unique_ptr<PresetLibrary> g_library;
         bool g_openPresetRequested{};
@@ -298,6 +300,41 @@ namespace ScreenshotLightingAssistant::UI
                 { center.x + 5.0F * scale, center.y + 3.0F * scale }, tint, 1.5F * scale);
             ImGuiMCP::ImDrawListManager::AddLine(drawList, { center.x + 5.0F * scale, center.y + 3.0F * scale },
                 { center.x + 10.0F * scale, center.y + 9.0F * scale }, tint, 1.5F * scale);
+            return clicked;
+        }
+
+        float PhotoEffectLauncherWidth()
+        {
+            return std::max(ImGuiMCP::GetFrameHeight(), ButtonWidth("*"));
+        }
+
+        bool DrawPhotoEffectLauncher(bool selected)
+        {
+            const float width = PhotoEffectLauncherWidth();
+            const float height = ImGuiMCP::GetFrameHeight();
+            const ImVec2 top = ImGuiMCP::GetCursorScreenPos();
+            const bool clicked = ImGuiMCP::InvisibleButton("##photo_effect_launcher", {width, height});
+            const bool hovered = ImGuiMCP::IsItemHovered() || ImGuiMCP::IsItemFocused();
+            const ImVec2 end{top.x + width, top.y + height};
+            auto* drawList = ImGuiMCP::GetWindowDrawList();
+            ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, top, end,
+                selected ? Color(112, 80, 32) : hovered ? Color(43, 55, 69) : Color(26, 33, 43), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRect(drawList, top, end,
+                selected ? Color(255, 202, 102) : hovered ? Color(150, 189, 220) : Color(78, 94, 111), 4.0F, 0, 1.5F);
+
+            const ImVec2 center{top.x + width * .5F, top.y + height * .5F};
+            const float scale = std::min(width, height) / 32.0F;
+            const auto tint = selected ? Color(255, 224, 155) : hovered ? Color(210, 229, 245) : Color(190, 208, 224);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, {center.x, center.y - 10.0F * scale},
+                {center.x, center.y + 10.0F * scale}, tint, 1.7F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, {center.x - 8.0F * scale, center.y},
+                {center.x + 8.0F * scale, center.y}, tint, 1.7F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, {center.x - 5.5F * scale, center.y - 5.5F * scale},
+                {center.x + 5.5F * scale, center.y + 5.5F * scale}, tint, 1.2F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, {center.x + 5.5F * scale, center.y - 5.5F * scale},
+                {center.x - 5.5F * scale, center.y + 5.5F * scale}, tint, 1.2F * scale);
+            ImGuiMCP::ImDrawListManager::AddCircleFilled(drawList,
+                {center.x + 9.0F * scale, center.y - 8.0F * scale}, 1.8F * scale, tint, 12);
             return clicked;
         }
 
@@ -1564,10 +1601,10 @@ namespace ScreenshotLightingAssistant::UI
             if (!g_libraryNotice.empty()) { ImGuiMCP::TextWrapped("%s", g_libraryNotice.c_str()); }
             if (!g_libraryLoadError.empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_libraryLoadError).c_str()); }
             if (g_library && !g_library->ViewError().empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_library->ViewError()).c_str()); }
-            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.2.0"));
+            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.3.0"));
             if (ImGuiMCP::IsItemHovered() && g_library) {
                 const auto utf8 = g_library->Directory().u8string();
-                Tooltip(Tr("%s\nMO2ではこの仮想Dataパスへの新規ファイルが通常Overwriteへ入ります。\n登録は再起動後も残り、ゲームのセーブとは独立です。\n登録から外したファイルは、この中のArchivedへ退避します。\n履歴・栞の登録は起動中のみの一時退避です。"), reinterpret_cast<const char*>(utf8.c_str()));
+                Tooltip(Tr("%s\nstorage-v2.slaがある場合は、そのファイルを提供する保存用MODへ新規ファイルも保存します。\nマーカーがない場合はMO2の通常出力先を使います。\n登録は再起動後も残り、ゲームのセーブとは独立です。\n登録から外したファイルは、この中のArchivedへ退避します。\n履歴・栞の登録は起動中のみの一時退避です。"), reinterpret_cast<const char*>(utf8.c_str()));
             }
         }
 
@@ -1709,6 +1746,163 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
+        void DrawPhotoEffectWindow(const RuntimeLight::View& runtime)
+        {
+            if (!g_photoEffectWindowOpen) { return; }
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            const ImVec2 maximum{viewport->WorkSize.x * .9F, viewport->WorkSize.y * .9F};
+            ImGuiMCP::SetNextWindowSize({std::min(420.0F, maximum.x), std::min(650.0F, maximum.y)},
+                ImGuiMCP::ImGuiCond_FirstUseEver);
+            ImGuiMCP::SetNextWindowSizeConstraints(
+                {std::min(300.0F, maximum.x), std::min(240.0F, maximum.y)}, maximum);
+            if (g_focusPhotoEffectWindow) {
+                ImGuiMCP::SetNextWindowFocus();
+                g_focusPhotoEffectWindow = false;
+            }
+            bool open = true;
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_WindowBg, Color(12, 18, 27));
+            const bool visible = ImGuiMCP::Begin(Tr("撮影エフェクト###sla_photo_effect"), &open,
+                ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            if (visible) {
+                auto settings = runtime.photoEffect;
+                bool changed = ImGuiMCP::Checkbox(Tr("撮影エフェクトを使用"), &settings.enabled);
+                if (!settings.enabled) {
+                    ImGuiMCP::TextWrapped(Tr("OFF：撮影ライトには追加されません。"));
+                } else if (!runtime.session.running) {
+                    ImGuiMCP::TextWrapped(Tr("待機：撮影ライトを開始すると対象の周囲へ表示します。"));
+                } else if (runtime.activePhotoEffects > 0) {
+                    const char* activeStatus = settings.type == PhotoEffectType::SakuraPetals ?
+                        "ON：対象の周囲へ花びらを表示しています。" :
+                        settings.type == PhotoEffectType::MagicStars ?
+                        "ON：対象の周囲へ星を表示しています。" :
+                        settings.type == PhotoEffectType::AutumnLeaves ?
+                        "ON：対象の周囲へ落ち葉を表示しています。" :
+                        settings.type == PhotoEffectType::WhiteFeathers ?
+                        "ON：対象の周囲へ白い羽を表示しています。" :
+                        settings.type == PhotoEffectType::PopStars ?
+                        "ON：対象の周囲へ星2を表示しています。" :
+                        settings.type == PhotoEffectType::BlackFeathers ?
+                        "ON：対象の周囲へ黒い羽を表示しています。" :
+                        settings.type == PhotoEffectType::SnowCrystals ?
+                        "ON：対象の周囲へ雪の結晶を表示しています。" :
+                        "ON：対象の周囲へ光の粒を表示しています。";
+                    ImGuiMCP::TextWrapped(Tr(activeStatus));
+                } else {
+                    ImGuiMCP::TextWrapped(Tr("開始待ち：対象と表示用メッシュを確認しています。"));
+                }
+                ImGuiMCP::Separator();
+                const char* effectItems[]{Tr("キラキラ"), Tr("花びら"), Tr("星"), Tr("星2"),
+                    Tr("落ち葉"), Tr("白い羽"), Tr("黒い羽"), Tr("雪の結晶")};
+                int effectType = PhotoEffectDisplayIndex(settings.type);
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                if (ImGuiMCP::Combo(Tr("種類"), &effectType, effectItems, 8)) {
+                    settings.type = PhotoEffectTypeFromDisplayIndex(effectType);
+                    ApplyPhotoEffectMotionPreset(settings, PhotoEffectMotionPreset::Gentle);
+                    changed = true;
+                }
+                const char* motionItems[]{Tr("ゆっくり舞う"), Tr("上から舞い落ちる"), Tr("風に流れる"), Tr("吹き上がる"),
+                    Tr("対象の周囲を旋回"), Tr("カスタム")};
+                int motionPreset = static_cast<int>(settings.motionPreset);
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                if (ImGuiMCP::Combo(Tr("動きプリセット"), &motionPreset, motionItems, 6)) {
+                    ApplyPhotoEffectMotionPreset(settings,
+                        static_cast<PhotoEffectMotionPreset>(motionPreset));
+                    changed = true;
+                }
+                ImGuiMCP::TextWrapped(Tr("プリセットは下記値の組み合わせです。"));
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                if (ImGuiMCP::SliderFloat(Tr("密度"), &settings.density,
+                    kPhotoEffectDensityMin, kPhotoEffectDensityMax, "%.2f")) {
+                    changed = true;
+                }
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("粒の大きさ"), &settings.size,
+                    kParticleSizeMin, kParticleSizeMax, "%.2f x") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("広がる範囲"), &settings.spread,
+                    kParticleFieldSpreadMin, kParticleFieldSpreadMax, "%.2f x") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("不透明度"), &settings.opacity,
+                    kPhotoEffectOpacityMin, kPhotoEffectOpacityMax, "%.2f") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                changed = ImGuiMCP::SliderFloat(Tr("明るさ"), &settings.brightness,
+                    kPhotoEffectBrightnessMin, kPhotoEffectBrightnessMax, "%.2f x") || changed;
+                ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                const bool positionChanged = ImGuiMCP::SliderFloat(Tr("上下位置"), &settings.verticalOffset,
+                    kParticleFieldVerticalMin, kParticleFieldVerticalMax, "%+.2f m");
+                if (positionChanged) {
+                    settings.motionPreset = PhotoEffectMotionPreset::Custom;
+                    changed = true;
+                }
+                if (ImGuiMCP::CollapsingHeader(Tr("動きの詳細調整"))) {
+                    bool motionChanged{};
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("動く速さ"), &settings.motionSpeed,
+                        kPhotoEffectMotionSpeedMin, kPhotoEffectMotionSpeedMax, "%.2f x") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("上下の移動（+上）"), &settings.verticalMovement,
+                        kPhotoEffectFlowMin, kPhotoEffectFlowMax, "%+.2f") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("横への流れ（+右）"), &settings.horizontalFlow,
+                        kPhotoEffectHorizontalFlowMin, kPhotoEffectHorizontalFlowMax, "%+.2f") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("浮遊感"), &settings.floatiness,
+                        kPhotoEffectFloatinessMin, kPhotoEffectFloatinessMax, "%.2f") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("ゆらぎ"), &settings.sway,
+                        kPhotoEffectSwayMin, kPhotoEffectSwayMax, "%.2f") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    motionChanged = ImGuiMCP::SliderFloat(Tr("ランダム感"), &settings.randomness,
+                        kPhotoEffectRandomnessMin, kPhotoEffectRandomnessMax, "%.2f") || motionChanged;
+                    ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                    if (ImGuiMCP::SliderFloat(Tr("表示時間"), &settings.lifetime,
+                        kPhotoEffectLifetimeMin, kPhotoEffectLifetimeMax, "%.2f x")) {
+                        settings.lifetime = PhotoEffectLifetimeFromVariant(
+                            PhotoEffectLifetimeVariant(settings.lifetime));
+                        motionChanged = true;
+                    }
+                    motionChanged = ImGuiMCP::Checkbox(Tr("対象の周囲を旋回"), &settings.orbit) || motionChanged;
+                    if (settings.orbit) {
+                        const char* orbitDirections[]{Tr("時計回り"), Tr("反時計回り")};
+                        int directionIndex = settings.orbitDirection < 0 ? 1 : 0;
+                        ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
+                        if (ImGuiMCP::Combo(Tr("旋回方向"), &directionIndex, orbitDirections, 2)) {
+                            settings.orbitDirection = directionIndex == 0 ? 1 : -1;
+                            motionChanged = true;
+                        }
+                    }
+                    if (motionChanged) {
+                        settings.motionPreset = PhotoEffectMotionPreset::Custom;
+                        changed = true;
+                    }
+                    ImGuiMCP::TextWrapped(Tr("上下・左右の0は停滞、+上下は上昇、-上下は下降です。浮遊感を上げると加速が穏やかになります。左右は撮影開始時または正面更新時のカメラ基準です。旋回・旋回方向・表示時間の変更時だけ粒を入れ替え、それ以外は自動反映します。"));
+                }
+                if (changed) { RuntimeLight::SetPhotoEffectSettings(settings); }
+                ImGuiMCP::Separator();
+                const char* effectDescription = settings.type == PhotoEffectType::SakuraPetals ?
+                    "淡い桜色の花びらが向きを変えながら対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::MagicStars ?
+                    "白を中心に淡い金色と青色を帯びた五芒星が、回転しながら対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::AutumnLeaves ?
+                    "リフテンの秋を思わせる黄・橙・赤褐色の落ち葉が、向きと表裏を変えながら対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::WhiteFeathers ?
+                    "白い羽が羽軸と羽枝の淡い青灰色の陰影を保ち、表・斜め・側面・裏面を変えながら対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::PopStars ?
+                    "中をくり抜いた明るい黄色の輪郭・コーラルピンク・暖かい淡黄色・スカイブルーを組み合わせた、固定サイズの平面的で先端の尖った星2が対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::BlackFeathers ?
+                    "白い羽と同じ形・姿勢・動きを共有する、黒を主体にごく控えめなグラファイトの細部を持つ黒い羽が表・斜め・側面・裏面を変えながら対象の周囲へ舞います。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    settings.type == PhotoEffectType::SnowCrystals ?
+                    "淡いアイスブルーの半透明な大・中・針状・小型の六花が、形と大きさを保ったまま緩やかに回転し、対象の周囲へ舞い降ります。内部は薄く、枝と輪郭だけが少し明るく見えます。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。" :
+                    "白～淡い金色の光の粒が粒ごとに異なる周期でまたたきながら、対象の周囲へ現れます。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。";
+                ImGuiMCP::TextWrapped(Tr(effectDescription));
+                ImGuiMCP::TextWrapped(Tr("粒の大きさ・広がる範囲・不透明度・明るさは別々に調整できます。"));
+                ImGuiMCP::TextWrapped(Tr("撮影エフェクト：初期状態はOFFです。"));
+            }
+            ImGuiMCP::End();
+            ImGuiMCP::PopStyleColor();
+            if (!open) { g_photoEffectWindowOpen = false; }
+        }
+
         void __stdcall Render()
         {
             // The token comes from before this UI frame. A load/stop invalidates it,
@@ -1729,22 +1923,39 @@ namespace ScreenshotLightingAssistant::UI
                 Tooltip(Tr("%s\n\nLight 1～3と独立したフェイスライトを実機反映します。\nメニューを閉じても点灯を維持します。停止・ロード・場所の移動ではフェイスを含む全灯を撤去し、自動再開しません。\n通常3灯は正面更新までカメラ基準を固定します。フェイスだけは頭・現在のカメラ位置へ自動追従します。"), runtime.status.c_str());
             }
             const float persistentFaceWidth = PersistentFaceLauncherWidth();
-            if (ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth +
-                ImGuiMCP::GetStyle()->ItemSpacing.x * 3 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
-            if (SelectableButton("P")) { g_editor.FinishNumericEdit(); g_openPresetRequested = true; }
-            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("プリセットを選ぶ（下のボタンと同じ一覧）")); }
+            const float photoEffectWidth = PhotoEffectLauncherWidth();
+            if (ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth +
+                ImGuiMCP::GetStyle()->ItemSpacing.x * 4 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
+            if (SelectableButton("P")) {
+                g_editor.FinishNumericEdit();
+                if (g_presetPicker.IsOpen()) {
+                    g_presetPicker.Close();
+                    g_openPresetRequested = false;
+                } else {
+                    g_openPresetRequested = true;
+                }
+            }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("プリセット一覧を開閉します（下のボタンと同じ一覧）。")); }
             if (ImGuiMCP::GetContentRegionAvail().x >= persistentFaceWidth) { ImGuiMCP::SameLine(); }
             if (DrawPersistentFaceLauncher(runtime.persistentFace.featureEnabled && runtime.persistentFace.enabled)) {
                 g_editor.FinishNumericEdit();
-                g_persistentFaceWindowOpen = true;
-                g_focusPersistentFaceWindow = true;
+                g_persistentFaceWindowOpen = !g_persistentFaceWindowOpen;
+                g_focusPersistentFaceWindow = g_persistentFaceWindowOpen;
+                if (!g_persistentFaceWindowOpen) { RuntimeLight::CancelPersistentHotkeyCapture(); }
             }
-            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("常用フェイスライトの設定を開きます。機能とプレイヤーライトがONのとき橙色になります。")); }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("常用フェイスライトの設定を開閉します。機能とプレイヤーライトがONのとき橙色になります。")); }
+            if (ImGuiMCP::GetContentRegionAvail().x >= photoEffectWidth) { ImGuiMCP::SameLine(); }
+            if (DrawPhotoEffectLauncher(runtime.photoEffect.enabled)) {
+                g_editor.FinishNumericEdit();
+                g_photoEffectWindowOpen = !g_photoEffectWindowOpen;
+                g_focusPhotoEffectWindow = g_photoEffectWindowOpen;
+            }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("撮影エフェクトの設定を開閉します。撮影エフェクトが有効なとき橙色になります。")); }
             const char* languageLabel = Current() == Language::Japanese ? "EN" : "JP";
             const float languageWidth = ButtonWidth(languageLabel);
             if (ImGuiMCP::GetContentRegionAvail().x >= languageWidth &&
-                ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + languageWidth +
-                    ImGuiMCP::GetStyle()->ItemSpacing.x * 5 <= topWidth) { ImGuiMCP::SameLine(); }
+                ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth + languageWidth +
+                    ImGuiMCP::GetStyle()->ItemSpacing.x * 6 <= topWidth) { ImGuiMCP::SameLine(); }
             if (SelectableButton(languageLabel)) {
                 g_editor.FinishNumericEdit();
                 const auto next = Current() == Language::Japanese ? Language::English : Language::Japanese;
@@ -1773,6 +1984,7 @@ namespace ScreenshotLightingAssistant::UI
             DrawPrototypeControls(anyActive);
             DrawPositionWindow(anyActive);
             DrawPersistentFaceWindow(runtime);
+            DrawPhotoEffectWindow(runtime);
             if (g_openPresetRequested) {
                 g_managePresets = false;
                 g_presetPicker.Open();
@@ -1816,7 +2028,8 @@ namespace ScreenshotLightingAssistant::UI
             g_library->Load();
             g_libraryLoadError = g_library->Error();
             logger::info("Preset library: {} lights, {} scenes at {}{}", g_library->Lights().size(),
-                g_library->Scenes().size(), storage.root.string(), storage.usingLegacy ? " (legacy fallback)" : "");
+                g_library->Scenes().size(), storage.root.string(), storage.usingLegacy ? " (legacy fallback)" :
+                    storage.usingResolvedOwner ? " (resolved storage owner)" : "");
         } else {
             g_libraryNotice = Tr("保存先が取得できないため登録を利用できません。");
         }

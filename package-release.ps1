@@ -1,11 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
 $project = $PSScriptRoot
-$workRoot = Split-Path -Parent $project
-$releaseRoot = Split-Path -Parent $workRoot
-$out = Join-Path $releaseRoot 'outputs'
-$version = '0.2.0'
-$releaseLabel = 'ScreenshotLightingAssistant-0.2.0'
+$out = Join-Path $project 'outputs'
+$version = '0.3.0'
+$releaseLabel = 'ScreenshotLightingAssistant-0.3.0'
 
 $installStage = Join-Path $out ($releaseLabel + '-MO2')
 $sourceStage = Join-Path $out ($releaseLabel + '-source')
@@ -20,21 +18,24 @@ foreach ($path in @($installStage, $sourceStage, $symbolsStage, $installZip, $so
     }
 }
 
-$oldArchive = Join-Path $out 'ScreenshotLightingAssistant-0.1.29-MO2.zip'
-$oldHash = '10943A571C1B21C564329DE9957B1C91D5D51242EFC07F4B9F6C3BCE189E7D82'
-if ((Get-FileHash -LiteralPath $oldArchive).Hash -ne $oldHash) {
-    throw 'Previous release hash mismatch'
-}
-
 $dll = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.dll')
 $pdb = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.pdb')
-if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.2.0.0') {
+if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.3.0.0') {
     throw 'Wrong DLL version'
 }
 
 # The installer root is Data-shaped. PDB and source files are deliberately excluded.
 $installFiles = [ordered]@{
     'SKSE/Plugins/ScreenshotLightingAssistant.dll' = $dll
+    'SKSE/Plugins/ParticleWind/SLA_NoWind.json' = (Join-Path $project 'config/ParticleWind/SLA_NoWind.json')
+    'textures/ScreenshotLightingAssistant/effects/luminous_mote_twinkle_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/luminous_mote_twinkle_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/sakura_petal_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/sakura_petal_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/magic_star.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/magic_star.dds')
+    'textures/ScreenshotLightingAssistant/effects/autumn_leaf_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/autumn_leaf_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/white_feather_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/white_feather_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/black_feather_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/black_feather_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/pop_star_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/pop_star_atlas.dds')
+    'textures/ScreenshotLightingAssistant/effects/snow_crystal_atlas.dds' = (Join-Path $project 'textures/ScreenshotLightingAssistant/effects/snow_crystal_atlas.dds')
     'docs/ScreenshotLightingAssistant/README_JA.md' = (Join-Path $project 'README_JA.md')
     'docs/ScreenshotLightingAssistant/README_EN.md' = (Join-Path $project 'README_EN.md')
     'docs/ScreenshotLightingAssistant/RELEASE_CHECKLIST_JA.md' = (Join-Path $project 'RELEASE_CHECKLIST_JA.md')
@@ -47,17 +48,32 @@ $installFiles = [ordered]@{
     'docs/ScreenshotLightingAssistant/SKSEMenuFramework-LICENSE' = (Join-Path $project 'third_party/SKSEMenuFramework/LICENSE')
 }
 
+$effectMeshes = @(Get-ChildItem -LiteralPath (Join-Path $project 'meshes/ScreenshotLightingAssistant/effects') -File |
+    Where-Object { $_.Name -match '^(luminous_motes|sakura_petals|magic_stars|autumn_leaves|white_feathers|pop_stars|snow_crystals)_(low|standard|high)(_orbit_(cw|ccw))?_l(050|075|100|125|150|175|200)\.nif$' })
+if ($effectMeshes.Count -ne 441) {
+    throw ('Expected 441 normal/orbit motion and lifetime meshes for seven asset families; found ' + $effectMeshes.Count)
+}
+foreach ($file in $effectMeshes) {
+    $relative = 'meshes/ScreenshotLightingAssistant/effects/' + $file.Name
+    $installFiles[$relative] = $file.FullName
+}
+
 $symbolsFiles = [ordered]@{
     'symbols/ScreenshotLightingAssistant.pdb' = $pdb
     'SYMBOLS_README.md' = (Join-Path $project 'SYMBOLS_README.md')
 }
 
 $sourceFiles = [ordered]@{}
-foreach ($directory in @('src', 'tests', 'third_party')) {
+foreach ($directory in @('src', 'tests', 'third_party', 'assets', 'config')) {
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $project $directory) -File -Recurse) {
-        $relative = [IO.Path]::GetRelativePath($project, $file.FullName).Replace('\', '/')
+        $relative = $file.FullName.Substring($project.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
         $sourceFiles[$relative] = $file.FullName
     }
+}
+foreach ($file in Get-ChildItem -LiteralPath (Join-Path $project 'tools/sparkle_nif_builder') -File -Recurse |
+    Where-Object { $_.FullName -notmatch '[\\/]build(?:-[^\\/]+)?[\\/]' }) {
+    $relative = $file.FullName.Substring($project.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+    $sourceFiles[$relative] = $file.FullName
 }
 foreach ($file in @(
     '.gitignore',
@@ -67,17 +83,20 @@ foreach ($file in @(
     'README_JA.md',
     'README_TEST.md',
     'RELEASE_CHECKLIST_JA.md',
+    'ALPHA_TEST_CHECKLIST_JA.md',
     'ENGINE_NOTES.md',
     'DEPENDENCIES.md',
     'SYMBOLS_README.md',
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
+    'tools/build-particle-assets.cmd',
+    'tools/prepare_effect_textures.py',
     'package-release.ps1'
 )) {
     $sourceFiles[$file] = Join-Path $project $file
 }
-if ($sourceFiles.Count -ne 40) {
-    throw ('Unexpected source file set; review before packaging. Count=' + $sourceFiles.Count)
+if ($sourceFiles.Count -lt 40) {
+    throw ('Unexpectedly small source file set; review before packaging. Count=' + $sourceFiles.Count)
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -107,7 +126,7 @@ function New-VerifiedArchive($stage, $archive, $files, [string]$kind) {
             if ($relative.StartsWith('/') -or $relative.Contains('../') -or $relative.Contains(':')) {
                 throw ('Unsafe ZIP path: ' + $relative)
             }
-            if ($kind -eq 'installer' -and $relative -notmatch '^(SKSE/Plugins/|docs/ScreenshotLightingAssistant/)') {
+            if ($kind -eq 'installer' -and $relative -notmatch '^(SKSE/Plugins/|meshes/ScreenshotLightingAssistant/|textures/ScreenshotLightingAssistant/|docs/ScreenshotLightingAssistant/)') {
                 throw ('Invalid MO2 root: ' + $relative)
             }
 
@@ -149,15 +168,10 @@ $installer = New-VerifiedArchive $installStage $installZip $installFiles 'instal
 $source = New-VerifiedArchive $sourceStage $sourceZip $sourceFiles 'source'
 $symbols = New-VerifiedArchive $symbolsStage $symbolsZip $symbolsFiles 'symbols'
 
-if ((Get-FileHash -LiteralPath $oldArchive).Hash -ne $oldHash) {
-    throw 'Previous release was changed'
-}
-
 [ordered]@{
     installer = $installer
     source = $source
     symbols = $symbols
     dllVersion = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
     dllSha256 = (Get-FileHash -LiteralPath $dll).Hash
-    previousReleaseUnchanged = $oldHash
 } | ConvertTo-Json -Depth 5

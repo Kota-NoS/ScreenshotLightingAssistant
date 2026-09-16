@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "RuntimeLight.h"
+#include "PhotoEffectMotion.h"
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -8,6 +9,192 @@ namespace ScreenshotLightingAssistant::RuntimeLight
 {
     namespace
     {
+        std::string PhotoEffectMeshPath(PhotoEffectType type, int lifetimeVariant,
+            bool orbit, int orbitDirection)
+        {
+            constexpr std::array lifetimePercent{50, 75, 100, 125, 150, 175, 200};
+            const char* effect = type == PhotoEffectType::SakuraPetals ? "sakura_petals" :
+                type == PhotoEffectType::MagicStars ? "magic_stars" :
+                type == PhotoEffectType::AutumnLeaves ? "autumn_leaves" :
+                type == PhotoEffectType::SnowCrystals ? "snow_crystals" :
+                IsFeatherPhotoEffect(type) ? "white_feathers" :
+                type == PhotoEffectType::PopStars ? "pop_stars" : "luminous_motes";
+            const char* motionSuffix = !orbit ? "" :
+                (orbitDirection < 0 ? "_orbit_ccw" : "_orbit_cw");
+            // Always load the high-capacity mesh. Its posed emitter-rate
+            // interpolator is overwritten below, so density is continuous while
+            // the particle capacity remains sufficient at the maximum lifetime.
+            return std::format("ScreenshotLightingAssistant\\effects\\{}_high{}_l{:03}.nif",
+                effect, motionSuffix,
+                lifetimePercent[static_cast<std::size_t>(lifetimeVariant)]);
+        }
+
+        std::vector<RE::NiParticleSystem*> FindPhotoEffectParticleSystems(
+            RE::NiAVObject* object, PhotoEffectType type)
+        {
+            std::vector<RE::NiParticleSystem*> result;
+            if (!object) { return result; }
+
+            const auto addNamed = [&](const std::string& name) {
+                auto* named = object->GetObjectByName(RE::BSFixedString{name});
+                auto* particles = named ? named->AsParticlesGeom() : nullptr;
+                if (auto* system = netimmerse_cast<RE::NiParticleSystem*>(particles)) {
+                    result.push_back(system);
+                }
+            };
+            if (type == PhotoEffectType::AutumnLeaves) {
+                for (std::size_t index = 1; index <= 4; ++index) {
+                    addNamed(std::format("SLA Autumn Leaves Particles {}", index));
+                }
+            } else if (IsFeatherPhotoEffect(type)) {
+                for (std::size_t index = 1; index <= 4; ++index) {
+                    addNamed(std::format("SLA White Feathers Particles {}", index));
+                }
+            } else if (type == PhotoEffectType::PopStars) {
+                for (std::size_t index = 1; index <= 4; ++index) {
+                    addNamed(std::format("SLA Pop Stars Particles {}", index));
+                }
+            } else if (type == PhotoEffectType::SnowCrystals) {
+                for (std::size_t index = 1; index <= 4; ++index) {
+                    addNamed(std::format("SLA Snow Crystals Particles {}", index));
+                }
+            } else {
+                addNamed(type == PhotoEffectType::SakuraPetals ?
+                    "SLA Sakura Petals Particles" : type == PhotoEffectType::MagicStars ?
+                    "SLA Magic Stars Particles" : "SLA Luminous Motes Particles");
+            }
+            return result;
+        }
+
+        RE::NiAVObject* FindPhotoEffectEmitterNode(RE::NiAVObject* object,
+            PhotoEffectType type)
+        {
+            if (!object) { return nullptr; }
+            const RE::BSFixedString name(type == PhotoEffectType::SakuraPetals ?
+                "SLA Sakura Petals Emitter" : type == PhotoEffectType::MagicStars ?
+                "SLA Magic Stars Emitter" : type == PhotoEffectType::AutumnLeaves ?
+                "SLA Autumn Leaves Emitter" : IsFeatherPhotoEffect(type) ?
+                "SLA White Feathers Emitter" : type == PhotoEffectType::PopStars ?
+                "SLA Pop Stars Emitter" : type == PhotoEffectType::SnowCrystals ?
+                "SLA Snow Crystals Emitter" : "SLA Luminous Motes Emitter");
+            return object->GetObjectByName(name);
+        }
+
+        RE::NiPSysGravityModifier* FindPhotoEffectGravity(RE::NiParticleSystem* system)
+        {
+            if (!system) { return nullptr; }
+            for (auto& modifier : system->GetParticleSystemRuntimeData().modifierList) {
+                if (auto* gravity = netimmerse_cast<RE::NiPSysGravityModifier*>(modifier.get())) {
+                    return gravity;
+                }
+            }
+            return nullptr;
+        }
+
+        RE::NiFloatInterpolator* FindPhotoEffectEmissionRate(RE::NiParticleSystem* system)
+        {
+            if (!system) { return nullptr; }
+            for (auto* controller = system->GetControllers(); controller;
+                controller = controller->GetNext()) {
+                auto* interpolated = netimmerse_cast<RE::NiInterpController*>(controller);
+                if (!interpolated) { continue; }
+                const auto count = interpolated->GetInterpolatorCount();
+                for (std::uint16_t index = 0; index < count; ++index) {
+                    auto* value = netimmerse_cast<RE::NiFloatInterpolator*>(
+                        interpolated->GetInterpolator(index));
+                    // The authored emitter uses one posed float. Refuse to edit an
+                    // animated curve belonging to an unexpected controller.
+                    if (value && !value->floatData) { return value; }
+                }
+            }
+            return nullptr;
+        }
+
+        void ApplyPhotoEffectParticleSize(RE::NiParticleSystem* system, float size)
+        {
+            if (!system) { return; }
+            auto* particleData = system->GetParticlesRuntimeData().particleData.get();
+            if (!particleData) { return; }
+            auto& runtimeData = particleData->GetParticlesRuntimeData();
+            if (!runtimeData.sizes) { return; }
+
+            // NiPSysData owns one size multiplier per particle slot. Writing the
+            // requested multiplier here changes the billboard itself without
+            // scaling world-space positions around the exterior cell origin.
+            std::fill_n(runtimeData.sizes, runtimeData.maxNumVertices, size);
+        }
+
+        struct OwnedEffectShader
+        {
+            RE::NiPointer<RE::BSEffectShaderProperty> property;
+            float authoredBaseRed{1.0F};
+            float authoredBaseGreen{1.0F};
+            float authoredBaseBlue{1.0F};
+            float authoredBaseColorScale{1.0F};
+            bool blackFeatherTextureApplied{};
+        };
+
+        bool ApplyBlackFeatherTexture(RE::BSEffectShaderMaterial* material)
+        {
+            if (!material) { return false; }
+            RE::NiPointer<RE::NiTexture> loadedTexture;
+            RE::BSShaderManager::GetTexture(kBlackFeatherTexturePath, true,
+                loadedTexture, false);
+            auto* sourceTexture = loadedTexture ?
+                netimmerse_cast<RE::NiSourceTexture*>(loadedTexture.get()) : nullptr;
+            if (!sourceTexture) {
+                logger::warn("Black feather texture could not be loaded: {}",
+                    kBlackFeatherTexturePath);
+                return false;
+            }
+            material->sourceTexture.reset(sourceTexture);
+            material->sourceTexturePath = kBlackFeatherTexturePath;
+            return true;
+        }
+
+        std::optional<OwnedEffectShader> FindPhotoEffectShader(RE::NiParticleSystem* system,
+            PhotoEffectType type)
+        {
+            if (!system) { return std::nullopt; }
+            auto* base = system->GetGeometryRuntimeData().shaderProperty.get();
+            auto* property = base ? netimmerse_cast<RE::BSEffectShaderProperty*>(base) : nullptr;
+            auto* material = property ? property->GetMaterial() : nullptr;
+            if (!property || !material) { return std::nullopt; }
+            const bool blackTextureApplied = type == PhotoEffectType::BlackFeathers &&
+                ApplyBlackFeatherTexture(material);
+            return OwnedEffectShader{RE::NiPointer<RE::BSEffectShaderProperty>{property},
+                material->baseColor.red, material->baseColor.green, material->baseColor.blue,
+                material->baseColorScale, blackTextureApplied};
+        }
+
+        void ApplyPhotoEffectAppearance(OwnedEffectShader& shader, PhotoEffectType type,
+            float opacity, float brightness)
+        {
+            if (!shader.property) { return; }
+            auto* material = shader.property->GetMaterial();
+            if (!material) { return; }
+
+            // Skyrim's effect-shader path applies base-colour alpha and then
+            // source-alpha blending, producing an extra alpha attenuation. Remove
+            // that internal factor from colour intensity while leaving coverage
+            // at the requested opacity. This makes the UI's opacity x brightness
+            // guide useful without respawning or moving live particles.
+            auto tint = PhotoEffectTint(type);
+            if (type == PhotoEffectType::BlackFeathers &&
+                !shader.blackFeatherTextureApplied) {
+                // A missing optional texture must never turn black feathers back
+                // into white ones. The compensated graphite tint also preserves
+                // the alpha43 peak contribution after neutralizing the shared NIF.
+                tint = BlackFeatherFallbackTint();
+            }
+            material->baseColor.red = shader.authoredBaseRed * tint.red;
+            material->baseColor.green = shader.authoredBaseGreen * tint.green;
+            material->baseColor.blue = shader.authoredBaseBlue * tint.blue;
+            material->baseColor.alpha = opacity;
+            material->baseColorScale = shader.authoredBaseColorScale *
+                PhotoEffectMaterialBrightnessScale(opacity, brightness);
+        }
+
         struct Runtime final : RE::BSTEventSink<RE::MenuOpenCloseEvent>, RE::BSTEventSink<RE::InputEvent*>
         {
             std::mutex mutex;
@@ -20,6 +207,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             std::atomic_bool persistentFaceActive = false;
             std::atomic_bool persistentFaceWaiting = false;
             std::atomic_bool persistentFaceUsesPhotoLight = false;
+            std::atomic_bool ownsEffect = false;
+            std::atomic_size_t activePhotoEffectCount = 0;
             std::atomic<std::uint64_t> persistentSaveRevision = 0;
             PersistentFaceSettings persistentFace;
             std::filesystem::path persistentFacePath;
@@ -28,6 +217,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             std::string persistentGamepadHotkeyName = "未設定";
             bool persistentHotkeyCapture = false;
             bool persistentGamepadCapture = false;
+            PhotoEffectSettings photoEffect;
             PersistentGamepadHoldGate persistentGamepadHold;
             struct TargetCommand {
                 std::uint64_t epoch;
@@ -58,6 +248,22 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 std::optional<int> appliedType;
             };
             std::array<OwnedLight, kRuntimeLightCount> lights;
+            struct OwnedParticleField
+            {
+                RE::NiPointer<RE::BSTempEffectParticle> effect;
+                RE::NiPointer<RE::NiAVObject> emitterNode;
+                std::vector<RE::NiPointer<RE::NiParticleSystem>> particleSystems;
+                std::vector<RE::NiPointer<RE::NiPSysGravityModifier>> gravities;
+                std::vector<RE::NiPointer<RE::NiFloatInterpolator>> emissionRates;
+                std::vector<OwnedEffectShader> shaders;
+                int lifetimeVariant{-1};
+                PhotoEffectType type{PhotoEffectType::LuminousMotes};
+                bool orbit{};
+                int orbitDirection{1};
+                RE::FormID cellID{};
+                std::uint8_t motionSearchAttempts{};
+            };
+            OwnedParticleField particleField;
             std::optional<CameraBasis> basis;
             std::uint64_t appliedEpoch = 0;
             std::uint64_t appliedAlignment = 0;
@@ -89,6 +295,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 result.persistentGamepadCapture = persistentGamepadCapture;
                 result.persistentGamepadHotkeyName = persistentGamepadHotkeyName;
                 result.persistentFaceError = persistentFaceError;
+                result.photoEffect = photoEffect;
+                result.activePhotoEffects = activePhotoEffectCount.load();
                 return result;
             }
             LightSessionSnapshot Request()
@@ -100,6 +308,11 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             {
                 std::scoped_lock lock(mutex);
                 return persistentFace;
+            }
+            PhotoEffectSettings EffectRequest()
+            {
+                std::scoped_lock lock(mutex);
+                return photoEffect;
             }
             bool PersistentRequested()
             {
@@ -150,10 +363,178 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             void Clear()
             {
                 for (std::size_t slot = 0; slot < lights.size(); ++slot) { ClearSlot(slot); }
+                ClearEffects();
                 scene.reset();
                 persistentFaceActive.store(false);
                 persistentFaceWaiting.store(false);
                 persistentFaceUsesPhotoLight.store(false);
+            }
+
+            void ClearEffects()
+            {
+                if (particleField.effect) {
+                    particleField.effect->lifetime = 0.0F;
+                    if (particleField.effect->particleObject) {
+                        particleField.effect->particleObject->SetAppCulled(true);
+                    }
+                    particleField.effect->Detach();
+                }
+                particleField = {};
+                ownsEffect.store(false);
+                activePhotoEffectCount.store(0);
+            }
+
+            void UpdateEffects(const PhotoEffectSettings& settings, RE::TESObjectCELL* cell,
+                const LightVector& anchor, const CameraBasis& cameraBasis)
+            {
+                if (!settings.enabled || !cell) {
+                    ClearEffects();
+                    return;
+                }
+
+                const bool expired = particleField.effect &&
+                    (particleField.effect->lifetime <= 0.0F ||
+                        particleField.effect->age >= particleField.effect->lifetime - 5.0F);
+                const bool variantChanged = particleField.effect &&
+                    (particleField.type != settings.type ||
+                        particleField.lifetimeVariant != PhotoEffectLifetimeVariant(settings.lifetime) ||
+                        particleField.orbit != settings.orbit ||
+                        particleField.orbitDirection != settings.orbitDirection);
+                const bool cellChanged = particleField.effect && particleField.cellID != cell->GetFormID();
+                if (expired || variantChanged || cellChanged) {
+                    ClearEffects();
+                }
+
+                const RE::NiPoint3 position{
+                    anchor.x,
+                    anchor.y,
+                    anchor.z + settings.verticalOffset * kUnitsPerMetre
+                };
+                if (!particleField.effect) {
+                    const auto effectType = static_cast<std::size_t>(settings.type);
+                    const int lifetimeVariant = PhotoEffectLifetimeVariant(settings.lifetime);
+                    const auto mesh = PhotoEffectMeshPath(settings.type, lifetimeVariant,
+                        settings.orbit, settings.orbitDirection);
+                    auto* effect = cell->PlaceParticleEffect(3600.0F, mesh.c_str(),
+                        RE::NiMatrix3{}, position, 1.0F, 0, nullptr);
+                    if (!effect) {
+                        logger::warn("Photo effect could not be spawned; type={}", effectType);
+                        return;
+                    }
+                    particleField.effect.reset(effect);
+                    particleField.lifetimeVariant = lifetimeVariant;
+                    particleField.type = settings.type;
+                    particleField.orbit = settings.orbit;
+                    particleField.orbitDirection = settings.orbitDirection;
+                    particleField.cellID = cell->GetFormID();
+                    logger::info("Photo effect spawned; type={}, density={:.2f}, lifetime={:.2f}x, cell={:08X}",
+                        effectType, settings.density, PhotoEffectLifetimeFromVariant(lifetimeVariant),
+                        cell->GetFormID());
+                }
+                particleField.effect->particleEffectTransform.translate = position;
+                particleField.effect->particleEffectTransform.scale = 1.0F;
+                if (auto* object = particleField.effect->particleObject.get()) {
+                    // particleEffectTransform is consumed while the async clone is
+                    // created, but changing it later does not move the live NIF.
+                    // Update the attached scene object itself so the world-space
+                    // emitter follows the subject while already emitted motes keep
+                    // their own world positions.
+                    object->local.translate = position;
+                    object->local.scale = 1.0F;
+                    object->local.rotate = RE::NiMatrix3{};
+                    if (settings.orbit) {
+                        // Orbit meshes simulate in target-local space. Rotating their
+                        // root therefore carries every live particle around the target,
+                        // instead of relying on the engine's inconsistent vortex field.
+                        object->local.rotate.MakeZRotation(
+                            PhotoEffectOrbitAngle(settings, particleField.effect->age));
+                    }
+                    const auto expectedParticleSystems =
+                        IsFourIdentityPhotoEffect(settings.type) ? 4U : 1U;
+                    const auto componentsReady = [&]() {
+                        return particleField.emitterNode &&
+                            particleField.particleSystems.size() == expectedParticleSystems &&
+                            particleField.gravities.size() == expectedParticleSystems &&
+                            particleField.emissionRates.size() == expectedParticleSystems &&
+                            particleField.shaders.size() == expectedParticleSystems;
+                    };
+                    if (!componentsReady() && particleField.motionSearchAttempts < 30) {
+                        particleField.emitterNode.reset(
+                            FindPhotoEffectEmitterNode(object, settings.type));
+                        particleField.particleSystems.clear();
+                        particleField.gravities.clear();
+                        particleField.emissionRates.clear();
+                        particleField.shaders.clear();
+                        for (auto* system : FindPhotoEffectParticleSystems(object, settings.type)) {
+                            particleField.particleSystems.emplace_back(system);
+                            if (auto* gravity = FindPhotoEffectGravity(system)) {
+                                particleField.gravities.emplace_back(gravity);
+                            }
+                            if (auto* rate = FindPhotoEffectEmissionRate(system)) {
+                                particleField.emissionRates.emplace_back(rate);
+                            }
+                            if (auto shader = FindPhotoEffectShader(system, settings.type)) {
+                                particleField.shaders.emplace_back(std::move(*shader));
+                            }
+                        }
+                        ++particleField.motionSearchAttempts;
+                        if (!componentsReady() && particleField.motionSearchAttempts == 30) {
+                            logger::warn("Photo effect nodes are unavailable; size, spread, density or motion controls are waiting");
+                        }
+                    }
+                    if (!particleField.emissionRates.empty()) {
+                        const auto ratePerSystem =
+                            PhotoEffectEmissionRate(settings.type, settings.density) /
+                            static_cast<float>(particleField.emissionRates.size());
+                        for (auto& rate : particleField.emissionRates) {
+                            rate->floatValue = ratePerSystem;
+                        }
+                    }
+                    if (particleField.emitterNode && !particleField.particleSystems.empty()) {
+                        // The box emitter lives on its parent node. Scaling that node
+                        // changes only the spawn field. Keep each child particle system
+                        // at unit world scale and apply size through NiPSysData instead;
+                        // scaling a world-space particle system also scales its stored
+                        // positions around the cell origin, which can hide exterior
+                        // particles until newly emitted ones refill the field.
+                        particleField.emitterNode->local.scale = settings.spread;
+                        for (auto& system : particleField.particleSystems) {
+                            system->local.scale = PhotoEffectSpreadCompensation(settings.spread);
+                            ApplyPhotoEffectParticleSize(system.get(), settings.size);
+                        }
+                    }
+                    // During the asynchronous NIF clone, some components can appear
+                    // one frame before the others. Wait for the complete set so a
+                    // partially discovered material is never re-captured after its
+                    // authored scale has already been multiplied.
+                    if (componentsReady()) {
+                        for (auto& shader : particleField.shaders) {
+                            ApplyPhotoEffectAppearance(shader, settings.type,
+                                settings.opacity, settings.brightness);
+                        }
+                    }
+                    RE::NiUpdateData update{ particleField.effect->age,
+                        RE::NiUpdateData::Flag::kDirty };
+                    object->UpdateTransformAndBounds(update);
+                    object->SetAppCulled(false);
+                    if (!particleField.gravities.empty()) {
+                        const auto motion = SamplePhotoEffectMotion(settings, cameraBasis,
+                            particleField.effect->age);
+                        for (auto& gravity : particleField.gravities) {
+                            gravity->gravityAxis = {
+                                motion.gravityAxis.x, motion.gravityAxis.y, motion.gravityAxis.z};
+                            gravity->strength = motion.gravityStrength;
+                            gravity->turbulence = motion.turbulence;
+                            gravity->scale = motion.turbulenceScale;
+                            gravity->worldAligned = true;
+                        }
+                    }
+                } else {
+                    activePhotoEffectCount.store(0);
+                    return;
+                }
+                ownsEffect.store(true);
+                activePhotoEffectCount.store(1);
             }
 
             void SetPersistentState(bool active, bool waiting, bool usesPhotoLight)
@@ -372,6 +753,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 ProcessTargetCommand();
                 const auto request = Request();
                 const auto persistent = PersistentRequest();
+                const auto effectSettings = EffectRequest();
                 const bool persistentRequested = persistent.featureEnabled && persistent.enabled;
                 if (request.epoch != appliedEpoch) {
                     Clear();
@@ -464,6 +846,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                             positionFallback ? "position+1.2m" : headFallback ? "head" : "chest", cellID);
                     }
                 }
+                if (request.running) { UpdateEffects(effectSettings, cell, anchor, *basis); }
+                else { ClearEffects(); }
                 // Hold the scene even with all slots OFF; scene replacement must still disarm.
                 if (!scene) { scene.reset(currentScene); }
                 std::optional<LightVector> facePosition;
@@ -779,7 +1163,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     rt.SavePersistentConfiguration();
                     savedRevision = revision;
                 }
-                if (!rt.dirty.load() && !rt.ownsLight.load() && !rt.Request().running && !rt.PersistentRequested()) { continue; }
+                if (!rt.dirty.load() && !rt.ownsLight.load() && !rt.ownsEffect.load() &&
+                    !rt.Request().running && !rt.PersistentRequested()) { continue; }
                 if (rt.queued.exchange(true)) { continue; }
                 SKSE::GetTaskInterface()->AddTask([] {
                     auto& state = Runtime::Get();
@@ -886,6 +1271,18 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             runtime.persistentFace.enabled = enabled;
         }
         runtime.persistentSaveRevision.fetch_add(1);
+        runtime.dirty.store(true);
+    }
+
+    void SetPhotoEffectSettings(const PhotoEffectSettings& settings)
+    {
+        if (!ValidPhotoEffectSettings(settings)) { return; }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (runtime.photoEffect == settings) { return; }
+            runtime.photoEffect = settings;
+        }
         runtime.dirty.store(true);
     }
 

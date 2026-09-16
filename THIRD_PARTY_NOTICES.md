@@ -21,3 +21,24 @@ The CommonLibSSE-NG exception text and its original MIT notice are included unde
 - Vendored revision: `3a65dc0147388da177c324cff4d89d9e25094623`
 
 The unmodified API header and its license are included under `third_party/SKSEMenuFramework/`.
+
+## nifly (build tool only)
+
+- Project: nifly
+- Source: https://github.com/SK83RJOSH/nifly
+- Revision used: `5504832da8009248ff68a9d306973ee1ba61a0a4`
+- License: GPL-3.0
+
+nifly was used offline to generate and verify the original particle-system NIFs.
+
+## Pop-star visual reference
+
+The Pop-star atlas is original project material, generated and then deterministically redrawn as flat transparent sprites. A user-supplied watermarked stock image was consulted only for broad pastel colour and silhouette direction. No pixels, layout, watermark or other artwork from that image are included.
+It is not linked into or distributed with the runtime DLL. ParticleFieldSE and
+other mods supplied no mesh or texture assets to this package.
+
+The luminous-mote, sakura-petal, magic-star, autumn-leaf and white-feather artwork, DDS textures
+and generated particle NIFs are original project assets rather than third-party
+content. The transparent petal, autumn-leaf and white-feather sources were created
+with OpenAI image generation and then processed locally for this project. The
+stock-site feather image supplied as visual direction was not copied or included.

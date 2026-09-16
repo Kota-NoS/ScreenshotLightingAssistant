@@ -3,6 +3,7 @@
 #include "TargetModel.h"
 #include "Localization.h"
 #include "PersistentFaceSettings.h"
+#include "PhotoEffectSettings.h"
 #include <filesystem>
 #include <string>
 
@@ -29,6 +30,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
         bool persistentGamepadCapture{};
         std::string persistentGamepadHotkeyName;
         std::string persistentFaceError;
+        PhotoEffectSettings photoEffect;
+        std::size_t activePhotoEffects{};
     };
     enum class TargetAction { Refresh, Nearby, Console, Crosshair, Player };
     void RequestTarget(std::uint64_t epoch, TargetAction action, std::uint64_t revision = 0, std::size_t index = 0);
@@ -42,6 +45,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
     void Submit(std::uint64_t epoch, const Scene& lights);
     void SetPersistentFaceEnabled(bool enabled);
     void SetPersistentFaceSettings(const PersistentFaceSettings& settings);
+    void SetPhotoEffectSettings(const PhotoEffectSettings& settings);
     void BeginPersistentHotkeyCapture();
     void BeginPersistentGamepadCapture();
     void CancelPersistentHotkeyCapture();
