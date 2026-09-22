@@ -1,3 +1,28 @@
+# 0.3.0 — public release
+
+- Promotes the in-game validated alpha54 code to the public 0.3.0 identity. Only version-facing strings, release documentation and package names change.
+- The same DLL behavior passed the complete regression checklist on Skyrim 1.6.1170 and 1.7.104.0. Steam screenshot capture was verified; Community Shaders was unavailable on 1.7.104 and ENB was not installed in that environment.
+
+# 0.3.0-alpha54 — Skyrim 1.7.104 compatibility update
+
+- CommonLibSSE-NG is updated from v6.1.0 to v8.4.0 (`adb3e2c4dff61d151370a6777ed9e77f8e005c62`). The generated plugin declaration now carries Address Library format 5 compatibility used by Skyrim 1.7.x.
+- The plugin remains a flat SE+AE build (`skyrim_se=true`, `skyrim_ae=true`, `skyrim_vr=false`). No hard-coded relocation IDs, trampolines, branch patches or vtable hooks were added.
+- Gameplay behavior, saved formats, UI and assets are intentionally identical to alpha53. Runtime-created lights, player/camera tracking, input, load transitions and SKSE Menu Framework registration require in-game regression on 1.7.104 and 1.6.1170.
+
+# 0.3.0-alpha53 — face-light tint shortcuts
+
+- Both face-light UIs reuse `kRuntimeTints` through one `White / Warm / Blue / Candle` mapping. No duplicate RGB constants or new renderer path were introduced.
+- Exact preset RGB selects its checked fixed swatch; any other valid RGB selects the checked custom swatch. White replaces the previous reset action.
+- Photography preset clicks still commit through `LightingEditor::SetFaceTint`; persistent clicks still update only `PersistentFaceSettings::tint`. Power, intensity, range, placement and ownership behavior are unchanged.
+- The alpha52 RGB persistence formats remain unchanged (`SLA SCENE 3` and `SLA PERSISTENT FACE 4`).
+
+# 0.3.0-alpha52 — independent face-light tint
+
+- `FaceLightSettings::tint` feeds the existing runtime `customTint`; this adds no renderer hook, light type, shadow registration or engine-form mutation.
+- Photography tint is included in editor snapshots, history, bookmarks and face-inclusive scene presets. Scene format v3 carries RGB; v1/v2 decode to white and are never rewritten merely by loading.
+- `PersistentFaceSettings` v4 carries a separate RGB triplet. v1-v3 decode to white. Photography ownership still suppresses the persistent light and restores its own saved tint after stop/load completion.
+- RGB is validated as finite `[0,1]` data at editor, scene, preset and persistent-settings boundaries. Invalid input rejects the whole snapshot atomically.
+
 # 0.3.0-alpha44 — neutral Star, Feather and Snow materials
 
 - Magic Stars, White Feathers and Snow Crystals now use `BSEffectShaderProperty::baseColorScale = 1.00`, neutral-white emitter RGB and neutral-white `BSPSysSimpleColorModifier` RGB keys.

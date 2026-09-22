@@ -884,6 +884,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     light.enabled = persistentRequested;
                     light.intensity = persistent.intensity;
                     light.range = persistent.range;
+                    light.customTint = persistent.tint;
                     light.castsShadow = false;
                     light.shadowProjection = ShadowProjection::Omni;
                     return light;

@@ -64,6 +64,7 @@ namespace ScreenshotLightingAssistant
         float range{kFaceRangeDefault};
         float heightOffset{kFaceHeightDefault};
         FaceLightBasis basis{FaceLightBasis::Head};
+        LightTint tint{1.0F, 1.0F, 1.0F};
         bool operator==(const PersistentFaceSettings&) const = default;
     };
 

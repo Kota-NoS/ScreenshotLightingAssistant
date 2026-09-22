@@ -12,6 +12,7 @@
 #include "PersistentFaceSettings.h"
 #include "PhotoEffectSettings.h"
 #include "PhotoEffectMotion.h"
+#include "ScreenOverlaySettings.h"
 #include <regex>
 #include <set>
 
@@ -1699,7 +1700,8 @@ namespace
     void IndependentFaceEditing()
     {
         LightingEditor editor;
-        Require(!editor.GetScene().face.enabled && editor.GetScene().face.intensity == .35F, "face starts OFF with weak default");
+        Require(!editor.GetScene().face.enabled && editor.GetScene().face.intensity == .35F &&
+            editor.GetScene().face.tint == LightTint{1, 1, 1}, "face starts OFF with weak white default");
         Require(editor.GetScene().size() == 3, "face never becomes a fourth direction/selection slot");
         editor.SelectSlot(2); // unplaced; face must still be editable
         const auto original = editor.GetScene();
@@ -1736,6 +1738,30 @@ namespace
         Require(editor.GetScene().face.intensity == 0, "face lower clamp");
         editor.SetFaceIntensity(100.0F); editor.FinishNumericEdit();
         Require(editor.GetScene().face.intensity == kFaceIntensityMax, "face upper clamp");
+        const auto beforeColor = editor.GetScene();
+        const auto colorHistory = editor.History().size();
+        for (int n = 0; n < 100; ++n) {
+            editor.SetFaceTint({.12F + n * .001F, .43F, .91F});
+        }
+        editor.SetFaceTint({.20F, .43F, .91F});
+        Require(editor.History().size() == colorHistory && editor.HasPendingChanges() &&
+            editor.GetScene().lights == beforeColor.lights && editor.SelectedSlot() == 2,
+            "face color preview coalesces without changing manual lights or selection");
+        editor.FinishNumericEdit();
+        const auto colored = editor.GetScene();
+        Require(editor.History().size() == colorHistory + 1 &&
+            colored.face.tint == LightTint{.20F, .43F, .91F} &&
+            RuntimeTint(*RuntimeSettings(colored, kFaceRuntimeSlot)) == colored.face.tint,
+            "one face color gesture is one history entry and reaches runtime exactly");
+        editor.Undo();
+        Require(editor.GetScene() == beforeColor, "face color undo restores the prior face only");
+        editor.Redo();
+        Require(editor.GetScene() == colored, "face color redo restores exact RGB");
+        for (float bad : {-.01F, 1.01F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+            const auto beforeBad = editor.GetScene();
+            editor.SetFaceTint({bad, .5F, .5F});
+            Require(editor.GetScene() == beforeBad, "invalid face color cannot alter editor state");
+        }
         editor.SelectSlot(0);
         const auto beforeMixed = editor.GetScene();
         editor.SetNumeric(NumericField::Intensity, 2.1F);
@@ -1773,6 +1799,38 @@ namespace
         }
     }
 
+    void FaceTintPresetPalette()
+    {
+        static_assert(kFaceTintPresetTypes == std::array<std::size_t, 4>{0, 1, 3, 2});
+        Require(FaceTintPreset(0) == LightTint{1, 1, 1} &&
+            FaceTintPreset(1) == LightTint{1, .8F, .53F} &&
+            FaceTintPreset(2) == LightTint{.3F, .55F, 1} &&
+            FaceTintPreset(3) == LightTint{1, .6F, .29F},
+            "face presets reuse white, warm, blue and candle renderer tints in UI order");
+        for (std::size_t index = 0; index < kFaceTintPresetTypes.size(); ++index) {
+            Require(ValidTint(FaceTintPreset(index)) &&
+                FaceTintPresetIndex(FaceTintPreset(index)) == std::optional<std::size_t>{index},
+                "each face preset is valid and maps back to its selected swatch");
+        }
+        Require(!FaceTintPresetIndex({.17F, .42F, .83F}),
+            "a non-preset face tint selects the custom swatch");
+
+        LightingEditor editor;
+        editor.SelectSlot(2);
+        editor.SetFaceTint({.17F, .42F, .83F});
+        editor.FinishNumericEdit();
+        for (std::size_t index = 0; index < kFaceTintPresetTypes.size(); ++index) {
+            const auto before = editor.GetScene();
+            const auto selectedSlot = editor.SelectedSlot();
+            editor.SetFaceTint(FaceTintPreset(index));
+            editor.FinishNumericEdit();
+            auto expected = before;
+            expected.face.tint = FaceTintPreset(index);
+            Require(editor.GetScene() == expected && editor.SelectedSlot() == selectedSlot,
+                "face preset changes only tint without selecting or editing a manual light");
+        }
+    }
+
     void FaceRuntimeAndGeometry()
     {
         for (int mask = 0; mask < 8; ++mask) {
@@ -1781,6 +1839,7 @@ namespace
             for (bool faceOn : { false, true }) {
                 for (float strength : { 0.0F, .35F, 1.0F, 2.42F, 3.0F }) {
                     scene.face = { faceOn, strength };
+                    scene.face.tint = {.17F, .42F, .91F};
                     LightSession session; session.SetReady(true);
                     Require(session.Start(session.Get().epoch, scene), "3+face scene starts");
                     const auto epoch = session.Get().epoch;
@@ -1790,8 +1849,9 @@ namespace
                         Require(RuntimeSettings(scene, slot) == std::optional(scene[slot]), "manual renderer settings unchanged");
                     }
                     const auto face = RuntimeSettings(scene, kFaceRuntimeSlot);
-                    Require(face && !face->castsShadow && face->type == 0 && face->range == kFaceRangeDefault && face->intensity == strength,
-                        "face is white shadowless short-range with only independent strength");
+                    Require(face && !face->castsShadow && face->type == 0 && face->range == kFaceRangeDefault &&
+                        face->intensity == strength && face->customTint == scene.face.tint && RuntimeTint(*face) == scene.face.tint,
+                        "face is shadowless short-range and carries independent strength and exact RGB");
                     Require(!LightRegistrationSettings::From(*face).shadow && !LightRegistrationSettings::From(*face).spot, "face never consumes a shadow registration");
                     Require(!RuntimeSettings(scene, kRuntimeLightCount) && !RuntimeSettings(scene, std::numeric_limits<std::size_t>::max()), "invalid runtime slot is guarded");
                     Require(!LightSession::ShouldIlluminateRuntime(session.Get(), kRuntimeLightCount), "invalid runtime slot cannot illuminate");
@@ -1826,6 +1886,13 @@ namespace
             Require(!session.Submit(session.Get().epoch, bad) && session.Get().lights == empty, "invalid OFF face rejects runtime snapshot atomically");
             LightSession fresh; fresh.SetReady(true);
             Require(!fresh.Start(fresh.Get().epoch, bad), "invalid face cannot start");
+        }
+        for (float invalid : {-.01F, 1.01F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+            auto bad = empty;
+            bad.face.tint = {invalid, .5F, .5F};
+            Require(!LightingEditor::IsValidScene(bad), "invalid face RGB rejects scene even while the face is OFF");
+            LightSession fresh; fresh.SetReady(true);
+            Require(!fresh.Start(fresh.Get().epoch, bad), "invalid face RGB cannot enter runtime");
         }
         for (LightVector head : { LightVector{}, LightVector{ 120, -350, 180 }, LightVector{ -1000, 2500, -90 } }) {
             for (LightVector direction : { LightVector{ 1, 0, 0 }, LightVector{ -1, 0, 0 }, LightVector{ 0, 1, 0 },
@@ -2072,8 +2139,11 @@ namespace
                         scene[i].customTint = LightTint{.123456789F, .987654321F, .333333333F};
                     }
                     scene.face = { true, 2.49F, .73F, -.31F };
+                    if (face) { scene.face.tint = {.13F, .44F, .91F}; }
                     SavedScene entry{ "夜の構成", scene, face, {} };
                     const auto text = PresetLibrary::Encode(entry);
+                    Require(text.starts_with(face ? "SLA SCENE 3\n" : "SLA SCENE 1\n"),
+                        "included colored face uses v3 while excluded face remains the legacy canonical format");
                     const auto decoded = PresetLibrary::DecodeScene(text);
                     auto expected = scene;
                     if (!face) { expected.face = {}; expected.face.basis = FaceLightBasis::Camera; }
@@ -2648,8 +2718,21 @@ namespace
         const auto explicitCamera = PresetLibrary::DecodeScene(version2 + "0\n");
         Require(explicitCamera && explicitCamera->scene == camera, "explicit v2 camera is accepted");
         Require(!PresetLibrary::DecodeScene(version2 + "1.5\n"), "fractional mode is rejected");
-        auto unknown = legacy; unknown.replace(0, 11, "SLA SCENE 3");
+        auto unknown = legacy; unknown.replace(0, 11, "SLA SCENE 4");
         Require(!PresetLibrary::DecodeScene(unknown), "unknown scene version rejected");
+
+        auto colored = headScene;
+        colored.face.tint = {.18F, .47F, .92F};
+        const auto coloredBytes = PresetLibrary::Encode(SavedScene{"colored face", colored, true, {}});
+        Require(coloredBytes.starts_with("SLA SCENE 3\n"), "colored face requires scene v3");
+        const auto coloredDecoded = PresetLibrary::DecodeScene(coloredBytes);
+        Require(coloredDecoded && coloredDecoded->scene == colored && coloredDecoded->scene.face.tint == colored.face.tint,
+            "scene v3 preserves exact face RGB");
+        const auto legacyDecoded = PresetLibrary::DecodeScene(legacy);
+        Require(legacyDecoded && legacyDecoded->scene.face.tint == LightTint{1, 1, 1},
+            "legacy scene v1 migrates face color to white");
+        Require(explicitCamera && explicitCamera->scene.face.tint == LightTint{1, 1, 1},
+            "legacy scene v2 migrates face color to white");
 
         const auto root = std::filesystem::temp_directory_path() / ("sla-face-mode-tests-" +
             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -2760,7 +2843,8 @@ namespace
         PersistentFaceSettings settings;
         Require(ValidPersistentFaceSettings(settings), "persistent face defaults are valid");
         Require(settings.featureEnabled && !settings.enabled && settings.hotkey == kNoPersistentFaceHotkey &&
-            settings.basis == FaceLightBasis::Head, "persistent face defaults are safe and unassigned");
+            settings.basis == FaceLightBasis::Head && settings.tint == LightTint{1, 1, 1},
+            "persistent face defaults are safe, white and unassigned");
 
         settings.featureEnabled = false;
         settings.enabled = true;
@@ -2770,10 +2854,12 @@ namespace
         settings.range = 1.75F;
         settings.heightOffset = -0.20F;
         settings.basis = FaceLightBasis::Head;
+        settings.tint = {.18F, .46F, .92F};
         const auto encoded = EncodePersistentFaceSettings(settings);
         PersistentFaceSettings decoded;
-        Require(!encoded.empty() && DecodePersistentFaceSettings(encoded, decoded) && decoded == settings,
-            "persistent face settings round-trip exactly");
+        Require(encoded.starts_with("SLA PERSISTENT FACE 4\n") && encoded.find("color 0.180000 0.460000 0.920000\n") != std::string::npos &&
+            DecodePersistentFaceSettings(encoded, decoded) && decoded == settings,
+            "persistent face v4 settings round-trip exact independent RGB");
         Require(!DecodePersistentFaceSettings(encoded + "unknown 1\n", decoded),
             "unknown persistent settings are rejected");
         auto duplicate = encoded + "enabled 1\n";
@@ -2789,6 +2875,12 @@ namespace
         auto invalidFloat = settings;
         invalidFloat.intensity = std::numeric_limits<float>::quiet_NaN();
         Require(!ValidPersistentFaceSettings(invalidFloat), "nonfinite persistent values are rejected");
+        for (float invalid : {-.01F, 1.01F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+            auto invalidTint = settings;
+            invalidTint.tint = {invalid, .5F, .5F};
+            Require(!ValidPersistentFaceSettings(invalidTint) && EncodePersistentFaceSettings(invalidTint).empty(),
+                "invalid persistent face RGB is rejected");
+        }
 
         const std::string version1 =
             "SLA PERSISTENT FACE 1\n"
@@ -2801,7 +2893,7 @@ namespace
         PersistentFaceSettings migrated;
         Require(DecodePersistentFaceSettings(version1, migrated) && migrated.featureEnabled && migrated.enabled &&
             migrated.hotkey == 66 && migrated.gamepadHotkey == kNoPersistentFaceHotkey &&
-            migrated.basis == FaceLightBasis::Head,
+             migrated.basis == FaceLightBasis::Head && migrated.tint == LightTint{1, 1, 1},
             "version 1 persistent settings migrate enabled with gamepad unassigned and head-facing placement");
 
         const std::string version2 =
@@ -2815,8 +2907,23 @@ namespace
             "basis camera\n";
         Require(DecodePersistentFaceSettings(version2, migrated) && migrated.featureEnabled && migrated.enabled &&
             migrated.hotkey == 66 && migrated.gamepadHotkey == 256 &&
-            migrated.basis == FaceLightBasis::Head,
-            "version 2 persistent settings migrate enabled and head-facing while preserving both hotkeys");
+             migrated.basis == FaceLightBasis::Head && migrated.tint == LightTint{1, 1, 1},
+             "version 2 persistent settings migrate enabled and head-facing while preserving both hotkeys");
+
+        const std::string version3 =
+            "SLA PERSISTENT FACE 3\n"
+            "feature 1\n"
+            "enabled 1\n"
+            "hotkey 66\n"
+            "gamepad 256\n"
+            "intensity 1.250000\n"
+            "range 1.750000\n"
+            "height -0.200000\n"
+            "basis head\n";
+        Require(DecodePersistentFaceSettings(version3, migrated) && migrated.featureEnabled && migrated.enabled &&
+            migrated.hotkey == 66 && migrated.gamepadHotkey == 256 && migrated.basis == FaceLightBasis::Head &&
+            migrated.tint == LightTint{1, 1, 1},
+            "version 3 persistent settings migrate to white without changing existing preferences");
 
         PersistentGamepadHoldGate hold;
         Require(!hold.Update(true, 0.0F) && !hold.Update(true, 0.59F),
@@ -3150,6 +3257,135 @@ namespace
         settings.floatiness = kPhotoEffectFloatinessMax + 0.01F;
         Require(!ValidPhotoEffectSettings(settings), "floatiness rejects out-of-range values");
     }
+
+    void ScreenOverlayComposition()
+    {
+        ScreenOverlaySettings settings{};
+        Require(!settings.enabled && !AnyScreenOverlayLayerEnabled(settings),
+            "screen overlay and all four categories start disabled");
+        Require(ValidScreenOverlaySettings(settings), "default screen overlay settings are valid");
+        Require(kScreenOverlayDrawOrder == std::array{
+                ScreenOverlayLayer::Light,
+                ScreenOverlayLayer::Shade,
+                ScreenOverlayLayer::Vignette,
+                ScreenOverlayLayer::Cinema},
+            "screen overlays use the fixed light-shade-vignette-bars draw order");
+
+        ScreenOverlaySettings toneOnly{};
+        SetScreenLightTone(toneOnly, ScreenLightTone::Cool);
+        Require(!toneOnly.enabled && !toneOnly.light.enabled &&
+            toneOnly.light.tone == ScreenLightTone::Cool,
+            "choosing a color is an option and does not enable the light category");
+        Require(ScreenLightToneColor(ScreenLightTone::Neutral) == std::array{1.0F, 1.0F, 1.0F},
+            "white screen-light preset is neutral full white rather than a second warm tint");
+
+        SelectScreenLightDirection(settings, ScreenLightDirection::UpperCenter);
+        Require(settings.enabled && settings.light.enabled &&
+            settings.light.direction == ScreenLightDirection::UpperCenter &&
+            settings.light.strength == 0.22F && settings.light.spread == 0.48F,
+            "top-center light selection enables only the light category with safe defaults");
+        SetScreenLightTone(settings, ScreenLightTone::Cool);
+        Require(settings.light.tone == ScreenLightTone::Cool &&
+            settings.light.color[0] == 0.49F && settings.light.color[1] == 0.72F && settings.light.color[2] == 1.0F,
+            "cool light tone applies its bounded color without changing direction");
+        SetScreenLightCustomColor(settings, {0.19F, 0.42F, 0.73F});
+        SetScreenLightTone(settings, ScreenLightTone::Warm);
+        SetScreenLightTone(settings, ScreenLightTone::Custom);
+        Require(settings.light.color == std::array{0.19F, 0.42F, 0.73F} &&
+            settings.light.customColor == settings.light.color,
+            "custom light color survives switching through a preset tone");
+
+        SelectScreenShadeDirection(settings, ScreenShadeDirection::LowerRight);
+        Require(settings.light.enabled && settings.shade.enabled &&
+            settings.shade.direction == ScreenShadeDirection::LowerRight,
+            "shade selection composes with the existing light instead of replacing it");
+        SelectScreenVignetteStyle(settings, ScreenVignetteStyle::Standard);
+        Require(settings.vignette.enabled && settings.vignette.style == ScreenVignetteStyle::Standard &&
+            settings.vignette.strength == 0.42F && settings.vignette.spread == 0.30F,
+            "standard vignette composes with category-specific defaults");
+        SelectScreenCinemaAspect(settings, 2.76F);
+        Require(settings.cinema.enabled && settings.cinema.strength == 1.0F && settings.cinema.aspect == 2.76F &&
+            AnyScreenOverlayLayerEnabled(settings),
+            "cinema bars enable independently and retain an opaque selected aspect");
+
+        const auto widescreen = CalculateCinemaBars(1920.0F, 1080.0F, 2.39F);
+        Require(widescreen.visible && std::abs(widescreen.height - 138.326F) < 0.01F,
+            "16-to-9 viewport receives symmetric cinema bars");
+        Require(kScreenCinemaPresetAspects == std::array{2.20F, 2.39F, 2.76F},
+            "cinema presets favor three visibly distinct ratios on a 16-to-9 viewport");
+        const auto subtleWqhd = CalculateCinemaBars(2560.0F, 1440.0F, kScreenCinemaPresetAspects.front());
+        Require(subtleWqhd.visible && std::abs(subtleWqhd.height - 138.182F) < 0.01F,
+            "2.20 cinema preset produces a subtle symmetric frame on WQHD");
+        const auto ultrawide = CalculateCinemaBars(3840.0F, 1440.0F, 2.39F);
+        Require(!ultrawide.visible && ultrawide.height == 0.0F,
+            "2.39 cinema bars do not crop an already-wider viewport");
+        const auto invalid = CalculateCinemaBars(1920.0F, 1080.0F, 0.0F);
+        Require(!invalid.visible && invalid.height == 0.0F,
+            "invalid viewport aspect fails closed");
+
+        Require(std::abs(ScreenDiagonalShadeReachScale(kScreenOverlaySpreadMin) - 0.5F) < 0.0001F &&
+            std::abs(ScreenDiagonalShadeReachScale(kScreenOverlaySpreadMax) - 1.5F) < 0.0001F &&
+            ScreenDiagonalShadeReachScale(0.62F) > 1.2F,
+            "diagonal corner lights and shades share a local-to-wide reach curve");
+        ScreenOverlaySettings toggles{};
+        ToggleScreenLightDirection(toggles, ScreenLightDirection::UpperLeft);
+        Require(ScreenOverlayLayerActive(toggles, toggles.light.enabled),
+            "first direction click enables its category and master switch");
+        ToggleScreenLightDirection(toggles, ScreenLightDirection::UpperLeft);
+        Require(toggles.enabled && !toggles.light.enabled,
+            "clicking the active light direction again disables only its category");
+        toggles.light.enabled = true;
+        toggles.enabled = false;
+        ToggleScreenLightDirection(toggles, ScreenLightDirection::UpperLeft);
+        Require(ScreenOverlayLayerActive(toggles, toggles.light.enabled),
+            "an option click while the master is off restores the preserved light selection");
+        ToggleScreenShadeDirection(toggles, ScreenShadeDirection::LowerLeft);
+        ToggleScreenShadeDirection(toggles, ScreenShadeDirection::LowerLeft);
+        Require(!toggles.shade.enabled && toggles.light.enabled,
+            "shade toggle does not alter another category");
+        ToggleScreenVignetteStyle(toggles, ScreenVignetteStyle::Soft);
+        toggles.vignette.strength = 0.57F;
+        ToggleScreenVignetteStyle(toggles, ScreenVignetteStyle::Soft);
+        ToggleScreenVignetteStyle(toggles, ScreenVignetteStyle::Soft);
+        Require(toggles.vignette.enabled && toggles.vignette.strength == 0.57F,
+            "re-enabling the same vignette preserves its detailed adjustment");
+        ToggleScreenVignetteStyle(toggles, ScreenVignetteStyle::Standard);
+        Require(toggles.vignette.style == ScreenVignetteStyle::Standard &&
+            toggles.vignette.strength == 0.42F,
+            "switching vignette style applies the new style defaults");
+        ToggleScreenCinemaAspect(toggles, 2.39F);
+        ToggleScreenCinemaAspect(toggles, 2.39F);
+        Require(!toggles.cinema.enabled,
+            "clicking the active cinema ratio again disables only the bars");
+
+        settings.light.strength = 0.91F;
+        settings.shade.strength = 0.73F;
+        ResetScreenOverlayLayerValues(settings, ScreenOverlayLayer::Light);
+        Require(settings.light.strength == 0.22F && settings.light.spread == 0.48F &&
+            settings.shade.strength == 0.73F,
+            "reset affects only the selected overlay category");
+
+        settings.light.strength = kScreenOverlayStrengthMax + 0.01F;
+        Require(!ValidScreenOverlaySettings(settings), "screen overlay rejects excessive strength");
+        settings.light.strength = 0.22F;
+        settings.shade.spread = kScreenOverlaySpreadMin - 0.01F;
+        Require(!ValidScreenOverlaySettings(settings), "screen overlay rejects an invalid spread");
+        settings.shade.spread = 0.62F;
+        settings.light.color[1] = 1.01F;
+        Require(!ValidScreenOverlaySettings(settings), "screen overlay rejects an invalid custom color component");
+        settings.light.color[1] = 0.42F;
+        settings.light.customColor[1] = -0.01F;
+        Require(!ValidScreenOverlaySettings(settings), "screen overlay rejects an invalid remembered custom color");
+        settings.light.customColor[1] = 0.42F;
+        settings.shade.direction = ScreenShadeDirection::Count;
+        Require(!ValidScreenOverlaySettings(settings), "screen overlay rejects a direction enum sentinel");
+        settings.shade.direction = ScreenShadeDirection::Bottom;
+        Require(ValidScreenOverlaySettings(settings), "composed settings become valid after bounded repairs");
+
+        settings.enabled = false;
+        Require(settings.light.enabled && settings.shade.enabled && settings.vignette.enabled && settings.cinema.enabled,
+            "master switch can hide the composition without losing category choices");
+    }
 }
 
 int main()
@@ -3181,6 +3417,7 @@ int main()
         SharedPositionEditor();
         BlueAndWideControls();
         IndependentFaceEditing();
+        FaceTintPresetPalette();
         FaceRuntimeAndGeometry();
         AdjustableFaceRange();
         AdjustableFaceHeight();
@@ -3197,6 +3434,7 @@ int main()
         TargetSelectionAndUniformDiagrams();
         PersistentFacePreferences();
         PhotoEffectPreferences();
+        ScreenOverlayComposition();
         std::cout << "PASS: " << checks << " lighting-state/layout/runtime-model checks\n";
         return 0;
     } catch (const std::exception& error) {

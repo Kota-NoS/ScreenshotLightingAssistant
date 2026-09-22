@@ -46,7 +46,7 @@ namespace ScreenshotLightingAssistant
             std::string magic, kind;
             int version{};
             if (!(in >> magic >> kind >> version >> std::quoted(name)) || magic != "SLA" || kind != expected ||
-                (version != 1 && !(sceneVersion && version == 2)) || !PresetLibrary::ValidName(name)) { return false; }
+                (version != 1 && !(sceneVersion && (version == 2 || version == 3))) || !PresetLibrary::ValidName(name)) { return false; }
             if (sceneVersion) { *sceneVersion = version; }
             return true;
         }
@@ -89,7 +89,8 @@ namespace ScreenshotLightingAssistant
         if (!entry.includeFace) { face.basis = FaceLightBasis::Camera; }
         // Keep legacy camera-only files byte-compatible. Head mode needs a versioned field;
         // old builds reject it safely instead of silently using the wrong placement.
-        const int version = face.basis == FaceLightBasis::Camera ? 1 : 2;
+        const int version = face.tint != LightTint{1, 1, 1} ? 3 :
+            face.basis == FaceLightBasis::Camera ? 1 : 2;
         auto out = Output("SCENE", entry.name, version);
         out << entry.includeFace << '\n';
         for (const auto& light : entry.scene) {
@@ -100,7 +101,8 @@ namespace ScreenshotLightingAssistant
             WriteTint(out, light.customTint);
         }
         out << face.enabled << ' ' << face.intensity << ' ' << face.range << ' ' << face.heightOffset << '\n';
-        if (version == 2) { out << static_cast<int>(face.basis) << '\n'; }
+        if (version >= 2) { out << static_cast<int>(face.basis) << '\n'; }
+        if (version == 3) { out << face.tint.red << ' ' << face.tint.green << ' ' << face.tint.blue << '\n'; }
         return out.str();
     }
     std::optional<SavedLight> PresetLibrary::DecodeLight(const std::string& data)
@@ -130,13 +132,16 @@ namespace ScreenshotLightingAssistant
         }
         auto& face = entry.scene.face;
         if (!(in >> face.enabled >> face.intensity >> face.range >> face.heightOffset)) { return std::nullopt; }
-        if (version == 2) {
+        if (version >= 2) {
             int basis{};
             if (!(in >> basis)) { return std::nullopt; }
             face.basis = static_cast<FaceLightBasis>(basis);
         } else {
             // SCENE 1 predates the basis field and always meant camera-relative.
             face.basis = FaceLightBasis::Camera;
+        }
+        if (version == 3 && (!(in >> face.tint.red >> face.tint.green >> face.tint.blue) || !ValidTint(face.tint))) {
+            return std::nullopt;
         }
         if (!LightingEditor::IsValidScene(entry.scene) || !End(in)) { return std::nullopt; }
         return entry;

@@ -12,6 +12,7 @@
 #include "LightVisual.h"
 #include "Localization.h"
 #include "StorageLocation.h"
+#include "ScreenOverlaySettings.h"
 #include <cstdarg>
 #include <cstdio>
 
@@ -55,7 +56,12 @@ namespace ScreenshotLightingAssistant::UI
         bool g_focusPersistentFaceWindow{ false };
         bool g_photoEffectWindowOpen{ false };
         bool g_focusPhotoEffectWindow{ false };
+        bool g_screenOverlayWindowOpen{ false };
+        bool g_focusScreenOverlayWindow{ false };
+        ScreenOverlaySettings g_screenOverlay{};
+        ScreenOverlayLayer g_screenOverlayDetail{ ScreenOverlayLayer::Vignette };
         SKSEMenuFramework::Model::InputEvent* g_frameworkInputEvent{};
+        SKSEMenuFramework::Model::HudElement* g_screenOverlayHudElement{};
         std::unique_ptr<PresetLibrary> g_library;
         bool g_openPresetRequested{};
         bool g_openLightLibraryRequested{};
@@ -122,6 +128,33 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::PopTextWrapPos();
                 ImGuiMCP::EndTooltip();
             }
+        }
+
+        void DrawTintSelectionMark(const ImVec2& top, float size, LightTint tint)
+        {
+            const ImVec2 end{top.x + size, top.y + size};
+            auto* drawList = ImGuiMCP::GetWindowDrawList();
+            ImGuiMCP::ImDrawListManager::AddRect(drawList, top, end,
+                Color(255, 202, 102), 3.0F, 0, 2.0F);
+            const float luminance = tint.red * .299F + tint.green * .587F + tint.blue * .114F;
+            const auto check = luminance > .68F ? Color(24, 31, 39) : Color(244, 248, 251);
+            const ImVec2 first{top.x + size * .25F, top.y + size * .54F};
+            const ImVec2 middle{top.x + size * .43F, top.y + size * .72F};
+            const ImVec2 last{top.x + size * .76F, top.y + size * .30F};
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, first, middle, check, 2.0F);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, middle, last, check, 2.0F);
+        }
+
+        bool FaceTintPresetSwatch(const char* id, const char* name, LightTint tint, bool selected)
+        {
+            const float size = ImGuiMCP::GetFrameHeight();
+            const bool clicked = ImGuiMCP::ColorButton(id, {tint.red, tint.green, tint.blue, 1.0F},
+                ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {size, size});
+            if (selected) { DrawTintSelectionMark(ImGuiMCP::GetItemRectMin(), size, tint); }
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip(Tr("%s。色だけを変更し、強さ・範囲・位置・ON/OFFは保持します。"), name);
+            }
+            return clicked;
         }
 
         void DrawCenteredText(ImDrawList* a_drawList, const ImVec2& a_center, const char* a_text, ImU32 a_color, float a_maxWidth = 80.0F, float textScale = 1.0F)
@@ -338,6 +371,42 @@ namespace ScreenshotLightingAssistant::UI
             return clicked;
         }
 
+        float ScreenOverlayLauncherWidth()
+        {
+            return std::max(ImGuiMCP::GetFrameHeight(), ButtonWidth("O"));
+        }
+
+        bool DrawScreenOverlayLauncher(bool selected)
+        {
+            const float width = ScreenOverlayLauncherWidth();
+            const float height = ImGuiMCP::GetFrameHeight();
+            const ImVec2 top = ImGuiMCP::GetCursorScreenPos();
+            const bool clicked = ImGuiMCP::InvisibleButton("##screen_overlay_launcher", {width, height});
+            const bool hovered = ImGuiMCP::IsItemHovered() || ImGuiMCP::IsItemFocused();
+            const ImVec2 end{top.x + width, top.y + height};
+            auto* drawList = ImGuiMCP::GetWindowDrawList();
+            ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, top, end,
+                selected ? Color(112, 80, 32) : hovered ? Color(43, 55, 69) : Color(26, 33, 43), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRect(drawList, top, end,
+                selected ? Color(255, 202, 102) : hovered ? Color(150, 189, 220) : Color(78, 94, 111), 4.0F, 0, 1.5F);
+
+            const ImVec2 center{top.x + width * .5F, top.y + height * .5F};
+            const float scale = std::min(width, height) / 32.0F;
+            const auto tint = selected ? Color(255, 224, 155) : hovered ? Color(210, 229, 245) : Color(190, 208, 224);
+            const ImVec2 frameMin{center.x - 10.0F * scale, center.y - 7.0F * scale};
+            const ImVec2 frameMax{center.x + 10.0F * scale, center.y + 7.0F * scale};
+            ImGuiMCP::ImDrawListManager::AddRect(drawList, frameMin, frameMax, tint, 1.0F * scale, 0, 1.4F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, frameMin,
+                {frameMin.x + 6.0F * scale, frameMin.y}, tint, 2.2F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, frameMin,
+                {frameMin.x, frameMin.y + 5.0F * scale}, tint, 2.2F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, frameMax,
+                {frameMax.x - 6.0F * scale, frameMax.y}, tint, 2.2F * scale);
+            ImGuiMCP::ImDrawListManager::AddLine(drawList, frameMax,
+                {frameMax.x, frameMax.y - 5.0F * scale}, tint, 2.2F * scale);
+            return clicked;
+        }
+
         void DrawFaceControls(const ImVec2& origin, float canvas, bool& anyActive)
         {
             const auto layout = CalculateFaceControls(canvas);
@@ -367,8 +436,11 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::ImDrawListManager::AddLine(drawList, { face.x - 11.0F, face.y + 11.0F }, { face.x + 11.0F, face.y - 11.0F }, tint, 1.5F);
             }
             if (ImGuiMCP::IsItemHovered()) {
-                Tooltip(Tr("フェイスライト : %s / 強さ %.2f\nクリックでON/OFF。ライト1/2/3や編集対象は変更しません。\n白・影なしの補助光です。隣の設定からカメラ基準／顔の向き基準を選べます。\n停止中は設定だけ変更します。撮影ライトを開始すると反映します。\n頭や配置方向を取得できない場合は待機します。"),
-                    g_editor.GetScene().face.enabled ? "ON" : "OFF", g_editor.GetScene().face.intensity);
+                const auto& color = g_editor.GetScene().face.tint;
+                Tooltip(Tr("フェイスライト : %s / 強さ %.2f / RGB %d, %d, %d\nクリックでON/OFF。ライト1/2/3や編集対象は変更しません。\n色を調整できる影なしの補助光です。隣の設定から色とカメラ基準／顔の向き基準を選べます。\n停止中は設定だけ変更します。撮影ライトを開始すると反映します。\n頭や配置方向を取得できない場合は待機します。"),
+                    g_editor.GetScene().face.enabled ? "ON" : "OFF", g_editor.GetScene().face.intensity,
+                    static_cast<int>(color.red * 255 + .5F), static_cast<int>(color.green * 255 + .5F),
+                    static_cast<int>(color.blue * 255 + .5F));
             }
             if (iconButton("##face_settings_button", layout.settings, false)) {
                 g_editor.FinishNumericEdit();
@@ -380,7 +452,7 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::ImDrawListManager::AddLine(drawList, { settings.x - 10.0F, y }, { settings.x + 10.0F, y }, Color(180, 201, 218), 1.5F);
                 ImGuiMCP::ImDrawListManager::AddCircleFilled(drawList, { settings.x + (row % 2 ? 4.0F : -4.0F), y }, 2.5F, Color(180, 201, 218), 12);
             }
-            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("フェイスライトの配置基準・強さ・光の範囲・上下を調整します。開くだけでは点灯・設定を変えません。")); }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("フェイスライトの配置基準・色・強さ・光の範囲・上下を調整します。開くだけでは点灯・設定を変えません。")); }
             if (ImGuiMCP::BeginPopup("face_settings")) {
                 ImGuiMCP::TextUnformatted(Tr("フェイスライト（影なし）"));
                 if (ImGuiMCP::RadioButton(Tr("カメラ基準"), g_editor.GetScene().face.basis == FaceLightBasis::Camera)) {
@@ -396,6 +468,39 @@ namespace ScreenshotLightingAssistant::UI
                 if (ImGuiMCP::IsItemHovered()) {
                     Tooltip(Tr("頭の向きに合わせて顔の前方へ配置します。横向き・上下・傾きに追従し、高さも頭の向きを基準にします。\n通常3灯・カメラ・キャラクターの向きは変えません。頭の向きを取得できない場合はフェイスライトだけ待機します。\n方式は履歴・栞・フェイス込みプリセットに含まれます。"));
                 }
+                auto faceTint = g_editor.GetScene().face.tint;
+                const auto selectedPreset = FaceTintPresetIndex(faceTint);
+                constexpr std::array<const char*, 4> presetNames{"白", "暖色", "青", "ろうそく"};
+                constexpr std::array<const char*, 4> presetIds{"##face_white", "##face_warm", "##face_blue", "##face_candle"};
+                ImGuiMCP::TextUnformatted(Tr("色"));
+                ImGuiMCP::SameLine();
+                for (std::size_t index = 0; index < presetNames.size(); ++index) {
+                    if (index != 0) { ImGuiMCP::SameLine(); }
+                    if (FaceTintPresetSwatch(presetIds[index], Tr(presetNames[index]), FaceTintPreset(index),
+                            selectedPreset && *selectedPreset == index)) {
+                        g_editor.FinishNumericEdit();
+                        g_editor.SetFaceTint(FaceTintPreset(index));
+                        g_editor.FinishNumericEdit();
+                    }
+                }
+                ImGuiMCP::SameLine();
+                faceTint = g_editor.GetScene().face.tint;
+                float color[]{faceTint.red, faceTint.green, faceTint.blue};
+                if (ImGuiMCP::ColorEdit3("##face_custom", color, ImGuiMCP::ImGuiColorEditFlags_NoInputs |
+                        ImGuiMCP::ImGuiColorEditFlags_NoOptions | ImGuiMCP::ImGuiColorEditFlags_NoAlpha)) {
+                    g_editor.SetFaceTint({color[0], color[1], color[2]});
+                }
+                anyActive = anyActive || ImGuiMCP::IsAnyItemActive();
+                const bool customHovered = ImGuiMCP::IsItemHovered();
+                const auto currentTint = g_editor.GetScene().face.tint;
+                if (!FaceTintPresetIndex(currentTint)) {
+                    DrawTintSelectionMark(ImGuiMCP::GetItemRectMin(), ImGuiMCP::GetFrameHeight(), currentTint);
+                }
+                if (customHovered) {
+                    Tooltip(Tr("自由色。色見本を押してフェイスライトの色を選びます。強さ・範囲・位置・ON/OFFは変えません。\n色は履歴・栞・フェイスを含む登録セットに含まれます。"));
+                }
+                ImGuiMCP::SameLine();
+                ImGuiMCP::TextUnformatted(Tr("自由色"));
                 float value = g_editor.GetScene().face.intensity;
                 ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 7.0F, 150.0F, 300.0F));
                 const bool changed = ImGuiMCP::SliderFloat(Tr("強さ##face"), &value, 0.0F, kFaceIntensityMax, "%.2f");
@@ -1707,6 +1812,35 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::SetNextItemWidth(std::clamp(ImGuiMCP::GetFontSize() * 9.0F, 170.0F, 310.0F));
                 changed = ImGuiMCP::SliderFloat(Tr("上下 (+上)##persistent"), &settings.heightOffset,
                     kFaceHeightMin, kFaceHeightMax, "%+.2f m") || changed;
+                const auto selectedPreset = FaceTintPresetIndex(settings.tint);
+                constexpr std::array<const char*, 4> presetNames{"白", "暖色", "青", "ろうそく"};
+                constexpr std::array<const char*, 4> presetIds{"##persistent_white", "##persistent_warm", "##persistent_blue", "##persistent_candle"};
+                ImGuiMCP::TextUnformatted(Tr("色"));
+                ImGuiMCP::SameLine();
+                for (std::size_t index = 0; index < presetNames.size(); ++index) {
+                    if (index != 0) { ImGuiMCP::SameLine(); }
+                    if (FaceTintPresetSwatch(presetIds[index], Tr(presetNames[index]), FaceTintPreset(index),
+                            selectedPreset && *selectedPreset == index)) {
+                        settings.tint = FaceTintPreset(index);
+                        changed = true;
+                    }
+                }
+                ImGuiMCP::SameLine();
+                float color[]{settings.tint.red, settings.tint.green, settings.tint.blue};
+                if (ImGuiMCP::ColorEdit3("##persistent_custom", color, ImGuiMCP::ImGuiColorEditFlags_NoInputs |
+                        ImGuiMCP::ImGuiColorEditFlags_NoOptions | ImGuiMCP::ImGuiColorEditFlags_NoAlpha)) {
+                    settings.tint = {color[0], color[1], color[2]};
+                    changed = true;
+                }
+                const bool customHovered = ImGuiMCP::IsItemHovered();
+                if (!FaceTintPresetIndex(settings.tint)) {
+                    DrawTintSelectionMark(ImGuiMCP::GetItemRectMin(), ImGuiMCP::GetFrameHeight(), settings.tint);
+                }
+                ImGuiMCP::SameLine();
+                ImGuiMCP::TextUnformatted(Tr("自由色"));
+                if (customHovered) {
+                    Tooltip(Tr("自由色。色見本を押して常用フェイスライトの色を選びます。撮影用フェイスライトの色とは別に保存します。"));
+                }
                 if (changed) { RuntimeLight::SetPersistentFaceSettings(settings); }
 
                 ImGuiMCP::Separator();
@@ -1733,7 +1867,7 @@ namespace ScreenshotLightingAssistant::UI
                     ImGuiMCP::EndDisabled();
                 }
                 ImGuiMCP::Separator();
-                ImGuiMCP::TextWrapped(Tr("白色・影なしのプレイヤー専用ライトです。撮影ライトとは別に使え、ロードや場所移動の完了後に自動で戻ります。ゲームのセーブデータには保存しません。"));
+                ImGuiMCP::TextWrapped(Tr("色を調整できる影なしのプレイヤー専用ライトです。撮影ライトとは別に使え、ロードや場所移動の完了後に常用側の色で自動復帰します。ゲームのセーブデータには保存しません。"));
                 if (!runtime.persistentFaceError.empty()) {
                     ImGuiMCP::TextWrapped("%s", Tr(runtime.persistentFaceError.c_str()));
                 }
@@ -1896,11 +2030,439 @@ namespace ScreenshotLightingAssistant::UI
                     "白～淡い金色の光の粒が粒ごとに異なる周期でまたたきながら、対象の周囲へ現れます。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。";
                 ImGuiMCP::TextWrapped(Tr(effectDescription));
                 ImGuiMCP::TextWrapped(Tr("粒の大きさ・広がる範囲・不透明度・明るさは別々に調整できます。"));
-                ImGuiMCP::TextWrapped(Tr("撮影エフェクト：初期状態はOFFです。"));
+                ImGuiMCP::TextWrapped(Tr("0.3.0 撮影エフェクト：初期状態はOFFです。"));
             }
             ImGuiMCP::End();
             ImGuiMCP::PopStyleColor();
             if (!open) { g_photoEffectWindowOpen = false; }
+        }
+
+        std::uint8_t OverlayAlpha(float strength)
+        {
+            return static_cast<std::uint8_t>(std::clamp(strength, 0.0F, 1.0F) * 255.0F + 0.5F);
+        }
+
+        std::uint8_t OverlayColorComponent(float component)
+        {
+            return static_cast<std::uint8_t>(std::clamp(component, 0.0F, 1.0F) * 255.0F + 0.5F);
+        }
+
+        void DrawVignette(ImDrawList* drawList, const ImVec2& top, const ImVec2& size,
+            float strength, float spread)
+        {
+            const auto dark = Color(0, 0, 0, OverlayAlpha(strength));
+            const auto clear = Color(0, 0, 0, 0);
+            const float edge = std::clamp(std::min(size.x, size.y) * spread, 1.0F,
+                std::min(size.x, size.y) * .49F);
+            const ImVec2 end{top.x + size.x, top.y + size.y};
+            ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, top, {top.x + edge, end.y},
+                dark, clear, clear, dark);
+            ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, {end.x - edge, top.y}, end,
+                clear, dark, dark, clear);
+            ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, top, {end.x, top.y + edge},
+                dark, dark, clear, clear);
+            ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, {top.x, end.y - edge}, end,
+                clear, clear, dark, dark);
+        }
+
+        void DrawGradientTriangle(ImDrawList* drawList,
+            const ImVec2& first, ImU32 firstColor,
+            const ImVec2& second, ImU32 secondColor,
+            const ImVec2& third, ImU32 thirdColor)
+        {
+            const auto baseVertex = static_cast<ImGuiMCP::ImDrawIdx>(drawList->_VtxCurrentIdx);
+            const auto uv = ImGuiMCP::GetFontTexUvWhitePixel();
+            ImGuiMCP::ImDrawListManager::PrimReserve(drawList, 3, 3);
+            ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList, baseVertex);
+            ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList,
+                static_cast<ImGuiMCP::ImDrawIdx>(baseVertex + 1));
+            ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList,
+                static_cast<ImGuiMCP::ImDrawIdx>(baseVertex + 2));
+            ImGuiMCP::ImDrawListManager::PrimWriteVtx(drawList, first, uv, firstColor);
+            ImGuiMCP::ImDrawListManager::PrimWriteVtx(drawList, second, uv, secondColor);
+            ImGuiMCP::ImDrawListManager::PrimWriteVtx(drawList, third, uv, thirdColor);
+        }
+
+        void DrawDirectionalShade(ImDrawList* drawList, const ImVec2& top, const ImVec2& size,
+            const ScreenShadeSettings& settings)
+        {
+            const auto dark = Color(0, 0, 0, OverlayAlpha(settings.strength));
+            const auto clear = Color(0, 0, 0, 0);
+            const ImVec2 end{top.x + size.x, top.y + size.y};
+            const float horizontal = std::clamp(size.x * settings.spread, 1.0F, size.x);
+            const float vertical = std::clamp(size.y * settings.spread, 1.0F, size.y);
+            const float diagonalScale = ScreenDiagonalShadeReachScale(settings.spread);
+            const float diagonalHorizontal = size.x * diagonalScale;
+            const float diagonalVertical = size.y * diagonalScale;
+            switch (settings.direction) {
+            case ScreenShadeDirection::Left:
+                ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, top, {top.x + horizontal, end.y},
+                    dark, clear, clear, dark);
+                break;
+            case ScreenShadeDirection::Right:
+                ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList, {end.x - horizontal, top.y}, end,
+                    clear, dark, dark, clear);
+                break;
+            case ScreenShadeDirection::LowerLeft:
+                DrawGradientTriangle(drawList,
+                    {top.x, end.y - diagonalVertical}, clear,
+                    {top.x + diagonalHorizontal, end.y}, clear,
+                    {top.x, end.y}, dark);
+                break;
+            case ScreenShadeDirection::Bottom:
+                ImGuiMCP::ImDrawListManager::AddRectFilledMultiColor(drawList,
+                    {top.x, end.y - vertical}, end, clear, clear, dark, dark);
+                break;
+            case ScreenShadeDirection::LowerRight:
+                DrawGradientTriangle(drawList,
+                    {end.x, end.y - diagonalVertical}, clear,
+                    {end.x - diagonalHorizontal, end.y}, clear,
+                    {end.x, end.y}, dark);
+                break;
+            case ScreenShadeDirection::Count:
+                break;
+            }
+        }
+
+        void DrawLightGlow(ImDrawList* drawList, const ImVec2& top, const ImVec2& size,
+            const ScreenLightSettings& settings)
+        {
+            const auto red = OverlayColorComponent(settings.color[0]);
+            const auto green = OverlayColorComponent(settings.color[1]);
+            const auto blue = OverlayColorComponent(settings.color[2]);
+            const auto light = Color(red, green, blue, OverlayAlpha(settings.strength));
+            const auto clear = Color(red, green, blue, 0);
+            const ImVec2 end{top.x + size.x, top.y + size.y};
+
+            if (settings.direction == ScreenLightDirection::UpperLeft) {
+                const float diagonalScale = ScreenDiagonalShadeReachScale(settings.spread);
+                DrawGradientTriangle(drawList,
+                    {top.x, top.y + size.y * diagonalScale}, clear,
+                    {top.x + size.x * diagonalScale, top.y}, clear,
+                    top, light);
+            } else if (settings.direction == ScreenLightDirection::UpperRight) {
+                const float diagonalScale = ScreenDiagonalShadeReachScale(settings.spread);
+                DrawGradientTriangle(drawList,
+                    {end.x, top.y + size.y * diagonalScale}, clear,
+                    {end.x - size.x * diagonalScale, top.y}, clear,
+                    {end.x, top.y}, light);
+            } else {
+                constexpr std::size_t kArcSegments = 64;
+                constexpr float kPi = 3.14159265358979323846F;
+                const float horizontal = std::clamp(size.x * settings.spread, 1.0F, size.x);
+                const float vertical = std::clamp(size.y * settings.spread, 1.0F, size.y);
+                const float center = top.x + size.x * 0.5F;
+                const float halfReach = std::min(horizontal, size.x * 0.5F);
+                std::array<ImVec2, kArcSegments + 1> points{};
+
+                for (std::size_t segment = 0; segment <= kArcSegments; ++segment) {
+                    const float angle = kPi - kPi * static_cast<float>(segment) /
+                        static_cast<float>(kArcSegments);
+                    points[segment] = {
+                        center + std::cos(angle) * halfReach,
+                        top.y + std::sin(angle) * vertical
+                    };
+                }
+
+                // A triangle fan gives every pixel a continuously interpolated alpha from the fixed
+                // top-center light source to the transparent half-ellipse edge. This avoids seams,
+                // rectangular bands, and the visible steps produced by stacked solid shapes.
+                const auto baseVertex = static_cast<ImGuiMCP::ImDrawIdx>(drawList->_VtxCurrentIdx);
+                const auto uv = ImGuiMCP::GetFontTexUvWhitePixel();
+                ImGuiMCP::ImDrawListManager::PrimReserve(drawList,
+                    static_cast<int>(kArcSegments * 3), static_cast<int>(points.size() + 1));
+                for (std::size_t segment = 0; segment < kArcSegments; ++segment) {
+                    ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList, baseVertex);
+                    ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList,
+                        static_cast<ImGuiMCP::ImDrawIdx>(baseVertex + segment + 1));
+                    ImGuiMCP::ImDrawListManager::PrimWriteIdx(drawList,
+                        static_cast<ImGuiMCP::ImDrawIdx>(baseVertex + segment + 2));
+                }
+                ImGuiMCP::ImDrawListManager::PrimWriteVtx(drawList,
+                    {center, top.y}, uv, light);
+                for (const auto& point : points) {
+                    ImGuiMCP::ImDrawListManager::PrimWriteVtx(drawList, point, uv, clear);
+                }
+            }
+        }
+
+        bool DrawScreenToneSwatch(const char* id, const char* tooltip,
+            const std::array<float, 3>& color, bool selected)
+        {
+            const float size = ImGuiMCP::GetFrameHeight();
+            const bool clicked = ImGuiMCP::ColorButton(id,
+                {color[0], color[1], color[2], 1.0F},
+                ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {size, size});
+            const ImVec2 top = ImGuiMCP::GetItemRectMin();
+            const ImVec2 end = ImGuiMCP::GetItemRectMax();
+            auto* drawList = ImGuiMCP::GetWindowDrawList();
+            if (selected) {
+                ImGuiMCP::ImDrawListManager::AddRect(drawList, top, end,
+                    Color(255, 202, 102), 3.0F, 0, 2.0F);
+                const float luminance = color[0] * .299F + color[1] * .587F + color[2] * .114F;
+                const auto check = luminance > .68F ? Color(24, 31, 39) : Color(244, 248, 251);
+                const ImVec2 first{top.x + size * .25F, top.y + size * .54F};
+                const ImVec2 middle{top.x + size * .43F, top.y + size * .72F};
+                const ImVec2 last{top.x + size * .76F, top.y + size * .30F};
+                ImGuiMCP::ImDrawListManager::AddLine(drawList, first, middle, check, 2.0F);
+                ImGuiMCP::ImDrawListManager::AddLine(drawList, middle, last, check, 2.0F);
+            }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(tooltip); }
+            return clicked;
+        }
+
+        const char* ScreenOverlayLayerLabel(ScreenOverlayLayer layer)
+        {
+            switch (layer) {
+            case ScreenOverlayLayer::Light: return Tr("光・色");
+            case ScreenOverlayLayer::Shade: return Tr("方向性の影");
+            case ScreenOverlayLayer::Vignette: return Tr("ビネット");
+            case ScreenOverlayLayer::Cinema: return Tr("上下枠");
+            }
+            return "";
+        }
+
+        void __stdcall DrawScreenOverlayHud()
+        {
+            if (!g_screenOverlay.enabled || !AnyScreenOverlayLayerEnabled(g_screenOverlay) ||
+                !ValidScreenOverlaySettings(g_screenOverlay)) {
+                return;
+            }
+            auto* viewport = ImGuiMCP::GetMainViewport();
+            if (!viewport || viewport->Size.x <= 0.0F || viewport->Size.y <= 0.0F) { return; }
+            auto* drawList = ImGuiMCP::GetBackgroundDrawList(viewport);
+            if (!drawList) { return; }
+
+            const ImVec2 top = viewport->Pos;
+            const ImVec2 size = viewport->Size;
+            const ImVec2 end{top.x + size.x, top.y + size.y};
+
+            // Keep the layer order deterministic so users never need to reason about compositing order.
+            if (g_screenOverlay.light.enabled) {
+                DrawLightGlow(drawList, top, size, g_screenOverlay.light);
+            }
+            if (g_screenOverlay.shade.enabled) {
+                DrawDirectionalShade(drawList, top, size, g_screenOverlay.shade);
+            }
+            if (g_screenOverlay.vignette.enabled) {
+                DrawVignette(drawList, top, size,
+                    g_screenOverlay.vignette.strength, g_screenOverlay.vignette.spread);
+            }
+            if (g_screenOverlay.cinema.enabled) {
+                const auto bars = CalculateCinemaBars(size.x, size.y, g_screenOverlay.cinema.aspect);
+                if (bars.visible) {
+                    const auto black = Color(0, 0, 0, OverlayAlpha(g_screenOverlay.cinema.strength));
+                    ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, top,
+                        {end.x, top.y + bars.height}, black, 0.0F, 0);
+                    ImGuiMCP::ImDrawListManager::AddRectFilled(drawList,
+                        {top.x, end.y - bars.height}, end, black, 0.0F, 0);
+                }
+            }
+        }
+
+        void DrawScreenOverlayWindow()
+        {
+            if (!g_screenOverlayWindowOpen) { return; }
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            const ImVec2 maximum{viewport->WorkSize.x * .9F, viewport->WorkSize.y * .9F};
+            ImGuiMCP::SetNextWindowSize({std::min(390.0F, maximum.x), std::min(500.0F, maximum.y)},
+                ImGuiMCP::ImGuiCond_FirstUseEver);
+            ImGuiMCP::SetNextWindowSizeConstraints(
+                {std::min(320.0F, maximum.x), std::min(300.0F, maximum.y)}, maximum);
+            if (g_focusScreenOverlayWindow) {
+                ImGuiMCP::SetNextWindowFocus();
+                g_focusScreenOverlayWindow = false;
+            }
+            bool open = true;
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_WindowBg, Color(12, 18, 27));
+            const bool visible = ImGuiMCP::Begin(Tr("画面演出###sla_screen_overlay"), &open,
+                ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            if (visible) {
+                bool enabled = g_screenOverlay.enabled;
+                if (ImGuiMCP::Checkbox(Tr("画面演出を使用"), &enabled)) {
+                    g_screenOverlay.enabled = enabled;
+                }
+                ImGuiMCP::TextWrapped(Tr("同じボタンをもう一度押すと、その演出だけOFFになります。"));
+                ImGuiMCP::Separator();
+
+                const float gap = ImGuiMCP::GetStyle()->ItemSpacing.x;
+                ImGuiMCP::TextUnformatted(Tr("光・色"));
+                ImGuiMCP::SameLine(0, gap);
+                struct ToneSwatch
+                {
+                    ScreenLightTone tone;
+                    const char* id;
+                    const char* label;
+                    std::array<float, 3> color;
+                };
+                const ToneSwatch tones[]{
+                    {ScreenLightTone::Warm, "##tone_warm", "暖色", ScreenLightToneColor(ScreenLightTone::Warm)},
+                    {ScreenLightTone::Neutral, "##tone_neutral", "白色", ScreenLightToneColor(ScreenLightTone::Neutral)},
+                    {ScreenLightTone::Cool, "##tone_cool", "寒色", ScreenLightToneColor(ScreenLightTone::Cool)},
+                    {ScreenLightTone::Custom, "##tone_custom", "自由色", g_screenOverlay.light.customColor}
+                };
+                for (std::size_t index = 0; index < std::size(tones); ++index) {
+                    if (DrawScreenToneSwatch(tones[index].id, Tr(tones[index].label), tones[index].color,
+                            g_screenOverlay.light.tone == tones[index].tone)) {
+                        SetScreenLightTone(g_screenOverlay, tones[index].tone);
+                        g_screenOverlayDetail = ScreenOverlayLayer::Light;
+                    }
+                    if (index + 1 < std::size(tones)) { ImGuiMCP::SameLine(0, gap); }
+                }
+
+                const float threeWidth = std::max(74.0F,
+                    (ImGuiMCP::GetContentRegionAvail().x - gap * 2.0F) / 3.0F);
+                if (SelectableButton(Tr("左上"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.light.enabled) &&
+                            g_screenOverlay.light.direction == ScreenLightDirection::UpperLeft,
+                        threeWidth)) {
+                    ToggleScreenLightDirection(g_screenOverlay, ScreenLightDirection::UpperLeft);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Light;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("上中央"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.light.enabled) &&
+                            g_screenOverlay.light.direction == ScreenLightDirection::UpperCenter,
+                        threeWidth)) {
+                    ToggleScreenLightDirection(g_screenOverlay, ScreenLightDirection::UpperCenter);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Light;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("右上"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.light.enabled) &&
+                            g_screenOverlay.light.direction == ScreenLightDirection::UpperRight,
+                        threeWidth)) {
+                    ToggleScreenLightDirection(g_screenOverlay, ScreenLightDirection::UpperRight);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Light;
+                }
+
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextUnformatted(Tr("方向性の影"));
+                const float twoWidth = std::max(112.0F,
+                    (ImGuiMCP::GetContentRegionAvail().x - gap) * .5F);
+                if (SelectableButton(Tr("左"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.shade.enabled) &&
+                            g_screenOverlay.shade.direction == ScreenShadeDirection::Left,
+                        twoWidth)) {
+                    ToggleScreenShadeDirection(g_screenOverlay, ScreenShadeDirection::Left);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Shade;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("右"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.shade.enabled) &&
+                            g_screenOverlay.shade.direction == ScreenShadeDirection::Right,
+                        twoWidth)) {
+                    ToggleScreenShadeDirection(g_screenOverlay, ScreenShadeDirection::Right);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Shade;
+                }
+                if (SelectableButton(Tr("左下"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.shade.enabled) &&
+                            g_screenOverlay.shade.direction == ScreenShadeDirection::LowerLeft,
+                        threeWidth)) {
+                    ToggleScreenShadeDirection(g_screenOverlay, ScreenShadeDirection::LowerLeft);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Shade;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("下"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.shade.enabled) &&
+                            g_screenOverlay.shade.direction == ScreenShadeDirection::Bottom,
+                        threeWidth)) {
+                    ToggleScreenShadeDirection(g_screenOverlay, ScreenShadeDirection::Bottom);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Shade;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("右下"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.shade.enabled) &&
+                            g_screenOverlay.shade.direction == ScreenShadeDirection::LowerRight,
+                        threeWidth)) {
+                    ToggleScreenShadeDirection(g_screenOverlay, ScreenShadeDirection::LowerRight);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Shade;
+                }
+
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextUnformatted(Tr("ビネット"));
+                const float halfWidth = std::max(112.0F,
+                    (ImGuiMCP::GetContentRegionAvail().x - gap) * .5F);
+                if (SelectableButton(Tr("柔らかい"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.vignette.enabled) &&
+                            g_screenOverlay.vignette.style == ScreenVignetteStyle::Soft,
+                        halfWidth)) {
+                    ToggleScreenVignetteStyle(g_screenOverlay, ScreenVignetteStyle::Soft);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Vignette;
+                }
+                ImGuiMCP::SameLine(0, gap);
+                if (SelectableButton(Tr("標準"),
+                        ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.vignette.enabled) &&
+                            g_screenOverlay.vignette.style == ScreenVignetteStyle::Standard,
+                        halfWidth)) {
+                    ToggleScreenVignetteStyle(g_screenOverlay, ScreenVignetteStyle::Standard);
+                    g_screenOverlayDetail = ScreenOverlayLayer::Vignette;
+                }
+
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextUnformatted(Tr("上下枠"));
+                constexpr const char* aspectLabels[]{"2.20:1", "2.39:1", "2.76:1"};
+                ImGuiMCP::PushID("screen_overlay_aspect");
+                for (std::size_t index = 0; index < kScreenCinemaPresetAspects.size(); ++index) {
+                    if (SelectableButton(aspectLabels[index],
+                            ScreenOverlayLayerActive(g_screenOverlay, g_screenOverlay.cinema.enabled) &&
+                                std::abs(g_screenOverlay.cinema.aspect - kScreenCinemaPresetAspects[index]) < 0.005F,
+                            threeWidth)) {
+                        ToggleScreenCinemaAspect(g_screenOverlay, kScreenCinemaPresetAspects[index]);
+                        g_screenOverlayDetail = ScreenOverlayLayer::Cinema;
+                    }
+                    if (index + 1 < kScreenCinemaPresetAspects.size()) { ImGuiMCP::SameLine(0, gap); }
+                }
+                ImGuiMCP::PopID();
+
+                ImGuiMCP::Separator();
+                if (ImGuiMCP::CollapsingHeader(Tr("詳細調整"))) {
+                    ImGuiMCP::TextDisabled("%s", ScreenOverlayLayerLabel(g_screenOverlayDetail));
+                    const float sliderWidth = std::clamp(ImGuiMCP::GetFontSize() * 10.0F, 180.0F, 330.0F);
+                    if (g_screenOverlayDetail == ScreenOverlayLayer::Light) {
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("強さ##screen_overlay"), &g_screenOverlay.light.strength,
+                            kScreenOverlayStrengthMin, kScreenOverlayStrengthMax, "%.2f");
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("広がり##screen_overlay"), &g_screenOverlay.light.spread,
+                            kScreenOverlaySpreadMin, kScreenOverlaySpreadMax, "%.2f");
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        if (ImGuiMCP::ColorEdit3(Tr("自由色##screen_overlay"), g_screenOverlay.light.customColor.data(),
+                                ImGuiMCP::ImGuiColorEditFlags_NoAlpha)) {
+                            SetScreenLightCustomColor(g_screenOverlay, g_screenOverlay.light.customColor);
+                        }
+                    } else if (g_screenOverlayDetail == ScreenOverlayLayer::Shade) {
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("強さ##screen_overlay"), &g_screenOverlay.shade.strength,
+                            kScreenOverlayStrengthMin, kScreenOverlayStrengthMax, "%.2f");
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("広がり##screen_overlay"), &g_screenOverlay.shade.spread,
+                            kScreenOverlaySpreadMin, kScreenOverlaySpreadMax, "%.2f");
+                    } else if (g_screenOverlayDetail == ScreenOverlayLayer::Vignette) {
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("強さ##screen_overlay"), &g_screenOverlay.vignette.strength,
+                            kScreenOverlayStrengthMin, kScreenOverlayStrengthMax, "%.2f");
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("広がり##screen_overlay"), &g_screenOverlay.vignette.spread,
+                            kScreenOverlaySpreadMin, kScreenOverlaySpreadMax, "%.2f");
+                    } else {
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("強さ##screen_overlay"), &g_screenOverlay.cinema.strength,
+                            kScreenOverlayStrengthMin, kScreenOverlayStrengthMax, "%.2f");
+                        ImGuiMCP::SetNextItemWidth(sliderWidth);
+                        ImGuiMCP::SliderFloat(Tr("画面比率##screen_overlay"), &g_screenOverlay.cinema.aspect,
+                            kScreenOverlayAspectMin, kScreenOverlayAspectMax, "%.2f : 1");
+                    }
+                    if (SelectableButton(Tr("選択中の調整値を戻す"))) {
+                        ResetScreenOverlayLayerValues(g_screenOverlay, g_screenOverlayDetail);
+                    }
+                }
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextWrapped(Tr("光・影・ビネット・上下枠の順で重ねます。設定は保存せず、ゲーム起動時は全体OFFです。"));
+            }
+            ImGuiMCP::End();
+            ImGuiMCP::PopStyleColor();
+            if (!open) { g_screenOverlayWindowOpen = false; }
         }
 
         void __stdcall Render()
@@ -1924,8 +2486,9 @@ namespace ScreenshotLightingAssistant::UI
             }
             const float persistentFaceWidth = PersistentFaceLauncherWidth();
             const float photoEffectWidth = PhotoEffectLauncherWidth();
-            if (ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth +
-                ImGuiMCP::GetStyle()->ItemSpacing.x * 4 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
+            const float screenOverlayWidth = ScreenOverlayLauncherWidth();
+            if (ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth + screenOverlayWidth +
+                ImGuiMCP::GetStyle()->ItemSpacing.x * 5 <= topWidth) { ImGuiMCP::SameLine(0, ImGuiMCP::GetStyle()->ItemSpacing.x * 2); }
             if (SelectableButton("P")) {
                 g_editor.FinishNumericEdit();
                 if (g_presetPicker.IsOpen()) {
@@ -1951,11 +2514,18 @@ namespace ScreenshotLightingAssistant::UI
                 g_focusPhotoEffectWindow = g_photoEffectWindowOpen;
             }
             if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("撮影エフェクトの設定を開閉します。撮影エフェクトが有効なとき橙色になります。")); }
+            if (ImGuiMCP::GetContentRegionAvail().x >= screenOverlayWidth) { ImGuiMCP::SameLine(); }
+            if (DrawScreenOverlayLauncher(g_screenOverlay.enabled && AnyScreenOverlayLayerEnabled(g_screenOverlay))) {
+                g_editor.FinishNumericEdit();
+                g_screenOverlayWindowOpen = !g_screenOverlayWindowOpen;
+                g_focusScreenOverlayWindow = g_screenOverlayWindowOpen;
+            }
+            if (ImGuiMCP::IsItemHovered()) { Tooltip(Tr("画面演出の設定を開閉します。画面演出が有効なとき橙色になります。")); }
             const char* languageLabel = Current() == Language::Japanese ? "EN" : "JP";
             const float languageWidth = ButtonWidth(languageLabel);
             if (ImGuiMCP::GetContentRegionAvail().x >= languageWidth &&
-                ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth + languageWidth +
-                    ImGuiMCP::GetStyle()->ItemSpacing.x * 6 <= topWidth) { ImGuiMCP::SameLine(); }
+                ButtonWidth(powerLabel) + ButtonWidth("P") + persistentFaceWidth + photoEffectWidth + screenOverlayWidth + languageWidth +
+                    ImGuiMCP::GetStyle()->ItemSpacing.x * 7 <= topWidth) { ImGuiMCP::SameLine(); }
             if (SelectableButton(languageLabel)) {
                 g_editor.FinishNumericEdit();
                 const auto next = Current() == Language::Japanese ? Language::English : Language::Japanese;
@@ -1985,6 +2555,7 @@ namespace ScreenshotLightingAssistant::UI
             DrawPositionWindow(anyActive);
             DrawPersistentFaceWindow(runtime);
             DrawPhotoEffectWindow(runtime);
+            DrawScreenOverlayWindow();
             if (g_openPresetRequested) {
                 g_managePresets = false;
                 g_presetPicker.Open();
@@ -2033,6 +2604,7 @@ namespace ScreenshotLightingAssistant::UI
         } else {
             g_libraryNotice = Tr("保存先が取得できないため登録を利用できません。");
         }
+        g_screenOverlayHudElement = SKSEMenuFramework::AddHudElement(DrawScreenOverlayHud);
         SKSEMenuFramework::AddSectionItem("Lighting", Render);
         g_registered = true;
         logger::info("Registered Screenshot Lighting Assistant with SKSE Menu Framework");

@@ -39,12 +39,14 @@ $installFiles = [ordered]@{
     'docs/ScreenshotLightingAssistant/README_JA.md' = (Join-Path $project 'README_JA.md')
     'docs/ScreenshotLightingAssistant/README_EN.md' = (Join-Path $project 'README_EN.md')
     'docs/ScreenshotLightingAssistant/RELEASE_CHECKLIST_JA.md' = (Join-Path $project 'RELEASE_CHECKLIST_JA.md')
+    'docs/ScreenshotLightingAssistant/VALIDATION_RESULTS_JA.md' = (Join-Path $project 'VALIDATION_RESULTS_JA.md')
     'docs/ScreenshotLightingAssistant/DEPENDENCIES.md' = (Join-Path $project 'DEPENDENCIES.md')
     'docs/ScreenshotLightingAssistant/LICENSE' = (Join-Path $project 'LICENSE')
     'docs/ScreenshotLightingAssistant/THIRD_PARTY_NOTICES.md' = (Join-Path $project 'THIRD_PARTY_NOTICES.md')
-    'docs/ScreenshotLightingAssistant/CommonLibSSE-NG-COPYING' = (Join-Path $project 'LICENSE')
+    'docs/ScreenshotLightingAssistant/CommonLibSSE-NG-COPYING' = (Join-Path $project 'third_party/CommonLibSSE-NG/COPYING.txt')
     'docs/ScreenshotLightingAssistant/CommonLibSSE-NG-EXCEPTIONS.md' = (Join-Path $project 'third_party/CommonLibSSE-NG/EXCEPTIONS.md')
     'docs/ScreenshotLightingAssistant/CommonLibSSE-NG-MIT-LICENSE' = (Join-Path $project 'third_party/CommonLibSSE-NG/MIT-LICENSE')
+    'docs/ScreenshotLightingAssistant/spdlog-LICENSE' = (Join-Path $project 'third_party/spdlog-source/LICENSE')
     'docs/ScreenshotLightingAssistant/SKSEMenuFramework-LICENSE' = (Join-Path $project 'third_party/SKSEMenuFramework/LICENSE')
 }
 
@@ -83,7 +85,7 @@ foreach ($file in @(
     'README_JA.md',
     'README_TEST.md',
     'RELEASE_CHECKLIST_JA.md',
-    'ALPHA_TEST_CHECKLIST_JA.md',
+    'VALIDATION_RESULTS_JA.md',
     'ENGINE_NOTES.md',
     'DEPENDENCIES.md',
     'SYMBOLS_README.md',

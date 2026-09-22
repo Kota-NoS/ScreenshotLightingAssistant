@@ -14,6 +14,7 @@ namespace ScreenshotLightingAssistant
         constexpr std::string_view kHeaderV1 = "SLA PERSISTENT FACE 1";
         constexpr std::string_view kHeaderV2 = "SLA PERSISTENT FACE 2";
         constexpr std::string_view kHeaderV3 = "SLA PERSISTENT FACE 3";
+        constexpr std::string_view kHeaderV4 = "SLA PERSISTENT FACE 4";
 
         bool ParseUnsigned(std::string_view value, std::uint32_t& result)
         {
@@ -26,6 +27,15 @@ namespace ScreenshotLightingAssistant
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result,
                 std::chars_format::general);
             return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && std::isfinite(result);
+        }
+
+        bool ParseTint(std::string_view value, LightTint& result)
+        {
+            std::istringstream stream{std::string(value)};
+            stream.imbue(std::locale::classic());
+            if (!(stream >> result.red >> result.green >> result.blue) || !ValidTint(result)) { return false; }
+            stream >> std::ws;
+            return stream.eof() && !stream.bad();
         }
 
         bool ReadExisting(const std::filesystem::path& path, PersistentFaceSettings& result)
@@ -45,7 +55,8 @@ namespace ScreenshotLightingAssistant
             std::isfinite(settings.intensity) && settings.intensity >= 0.0F && settings.intensity <= kFaceIntensityMax &&
             std::isfinite(settings.range) && settings.range >= kFaceRangeMin && settings.range <= kFaceRangeMax &&
             std::isfinite(settings.heightOffset) && settings.heightOffset >= kFaceHeightMin &&
-            settings.heightOffset <= kFaceHeightMax && settings.basis == FaceLightBasis::Head;
+            settings.heightOffset <= kFaceHeightMax && settings.basis == FaceLightBasis::Head &&
+            ValidTint(settings.tint);
     }
 
     std::string EncodePersistentFaceSettings(const PersistentFaceSettings& settings)
@@ -53,7 +64,7 @@ namespace ScreenshotLightingAssistant
         if (!ValidPersistentFaceSettings(settings)) { return {}; }
         std::ostringstream stream;
         stream.imbue(std::locale::classic());
-        stream << kHeaderV3 << '\n'
+        stream << kHeaderV4 << '\n'
                << "feature " << (settings.featureEnabled ? 1 : 0) << '\n'
                << "enabled " << (settings.enabled ? 1 : 0) << '\n'
                << "hotkey " << settings.hotkey << '\n'
@@ -62,7 +73,8 @@ namespace ScreenshotLightingAssistant
                << "intensity " << settings.intensity << '\n'
                << "range " << settings.range << '\n'
                << "height " << settings.heightOffset << '\n'
-               << "basis head\n";
+               << "basis head\n"
+               << "color " << settings.tint.red << ' ' << settings.tint.green << ' ' << settings.tint.blue << '\n';
         return stream.str();
     }
 
@@ -75,10 +87,11 @@ namespace ScreenshotLightingAssistant
         const bool version1 = line == kHeaderV1;
         const bool version2 = line == kHeaderV2;
         const bool version3 = line == kHeaderV3;
-        if (!version1 && !version2 && !version3) { return false; }
+        const bool version4 = line == kHeaderV4;
+        if (!version1 && !version2 && !version3 && !version4) { return false; }
 
         PersistentFaceSettings parsed;
-        std::array<bool, 8> seen{};
+        std::array<bool, 9> seen{};
         while (std::getline(stream, line)) {
             if (line.empty()) { continue; }
             const auto separator = line.find(' ');
@@ -88,7 +101,7 @@ namespace ScreenshotLightingAssistant
             std::size_t field{};
             if (key == "feature") {
                 field = 7;
-                if (!version3) { return false; }
+                if (!version3 && !version4) { return false; }
                 if (value == "0") { parsed.featureEnabled = false; }
                 else if (value == "1") { parsed.featureEnabled = true; }
                 else { return false; }
@@ -117,11 +130,14 @@ namespace ScreenshotLightingAssistant
                 if (value == "head") { parsed.basis = FaceLightBasis::Head; }
                 else if (value == "camera") { parsed.basis = FaceLightBasis::Camera; }
                 else { return false; }
+            } else if (key == "color") {
+                field = 8;
+                if (!version4 || !ParseTint(value, parsed.tint)) { return false; }
             } else { return false; }
             if (seen[field]) { return false; }
             seen[field] = true;
         }
-        const std::size_t requiredFields = version1 ? 6 : version2 ? 7 : 8;
+        const std::size_t requiredFields = version1 ? 6 : version2 ? 7 : version3 ? 8 : 9;
         const auto requiredEnd = seen.begin() + requiredFields;
         // The persistent light is intentionally head-facing from beta4 onward.
         // Older camera-facing profiles remain readable and migrate in memory.

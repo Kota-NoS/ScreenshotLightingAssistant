@@ -4,14 +4,25 @@
 
 - Project: CommonLibSSE-NG
 - Upstream: alandtse/CommonLibSSE-NG
-- Version used: v6.1.0 (`b1e0e03`)
+- Version used: v8.4.0 (`adb3e2c4dff61d151370a6777ed9e77f8e005c62`)
 - License: GPL-3.0-or-later WITH Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)
-- Source: https://github.com/alandtse/CommonLibSSE-NG/tree/v6.1.0
-- Exact release: https://github.com/alandtse/CommonLibSSE-NG/releases/tag/v6.1.0
+- Source: https://github.com/alandtse/CommonLibSSE-NG/tree/v8.4.0
+- Exact release: https://github.com/alandtse/CommonLibSSE-NG/releases/tag/v8.4.0
 
 This plugin links against CommonLibSSE-NG and is therefore distributed under GPL-3.0-or-later.
 The CommonLibSSE-NG exception text and its original MIT notice are included under
 `third_party/CommonLibSSE-NG/`. The full GPL-3.0 text is the root `LICENSE` file.
+
+## spdlog
+
+- Project: spdlog
+- Upstream: gabime/spdlog
+- Version used: v1.16.0 (`486b55554f11c9cccc913e11a87085b2a91f706f`)
+- License: MIT
+- Source: https://github.com/gabime/spdlog/tree/v1.16.0
+
+The exact headers, compiled-library source files and license are included under
+`third_party/spdlog-source/`.
 
 ## SKSE Menu Framework 3 API header
 

@@ -58,9 +58,10 @@ namespace ScreenshotLightingAssistant
         face.enabled = scene.face.enabled;
         face.intensity = scene.face.intensity;
         face.range = scene.face.range;
+        face.customTint = scene.face.tint;
         face.castsShadow = false;
         face.shadowProjection = ShadowProjection::Omni;
-        return face;  // fixed white, no manual slot's colour/position/shadow can leak in
+        return face;  // Face-owned colour; no manual slot's colour/position/shadow can leak in.
     }
 
     class LightSession
@@ -142,6 +143,20 @@ namespace ScreenshotLightingAssistant
         { 1.0F, 0.60F, 0.29F },
         { 0.30F, 0.55F, 1.0F }
     } };
+    // Face lights reuse the authored manual-light tints, but present blue before candle
+    // for the compact White / Warm / Blue / Candle picker requested by photographers.
+    inline constexpr std::array<std::size_t, kLightTypeCount> kFaceTintPresetTypes{ 0, 1, 3, 2 };
+    inline constexpr LightTint FaceTintPreset(std::size_t index)
+    {
+        return kRuntimeTints[kFaceTintPresetTypes[index]];
+    }
+    inline std::optional<std::size_t> FaceTintPresetIndex(LightTint tint)
+    {
+        for (std::size_t index = 0; index < kFaceTintPresetTypes.size(); ++index) {
+            if (FaceTintPreset(index) == tint) { return index; }
+        }
+        return std::nullopt;
+    }
     inline std::optional<LightTint> RuntimeTint(int type)
     {
         if (type < 0 || type >= static_cast<int>(kRuntimeTints.size())) { return std::nullopt; }

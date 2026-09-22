@@ -89,6 +89,7 @@ namespace ScreenshotLightingAssistant
         float range{ kFaceRangeDefault };
         float heightOffset{ kFaceHeightDefault }; // world up in Camera mode; head-local up in Head mode
         FaceLightBasis basis{ FaceLightBasis::Head };
+        LightTint tint{ 1.0F, 1.0F, 1.0F };
         bool operator==(const FaceLightSettings&) const = default;
     };
 
@@ -109,7 +110,7 @@ namespace ScreenshotLightingAssistant
         constexpr const LightSettings& operator[](std::size_t index) const { return lights[index]; }
         bool operator==(const Scene&) const = default;
     };
-    enum class NumericField { Intensity, Range, Distance, Height, FineHorizontal, FineVertical, FineDepth, FaceIntensity, FaceRange, FaceHeight, Color };
+    enum class NumericField { Intensity, Range, Distance, Height, FineHorizontal, FineVertical, FineDepth, FaceIntensity, FaceRange, FaceHeight, Color, FaceColor };
 
     struct HistoryEntry
     {
@@ -287,6 +288,15 @@ namespace ScreenshotLightingAssistant
             scene_.face.heightOffset = value;
         }
 
+        void SetFaceTint(LightTint tint)
+        {
+            if (!ValidTint(tint) || scene_.face.tint == tint) { return; }
+            if (pendingField_ && *pendingField_ != NumericField::FaceColor) { FinishNumericEdit(); }
+            pendingField_ = NumericField::FaceColor;
+            pendingLabel_ = "フェイスライト : 色";
+            scene_.face.tint = tint;
+        }
+
         static bool IsValidScene(const Scene& a_scene)
         {
             const auto inRange = [](float value, float min, float max) {
@@ -306,7 +316,7 @@ namespace ScreenshotLightingAssistant
             }
             return ValidFaceBasis(a_scene.face.basis) && inRange(a_scene.face.intensity, 0.0F, kFaceIntensityMax) &&
                 inRange(a_scene.face.range, kFaceRangeMin, kFaceRangeMax) &&
-                inRange(a_scene.face.heightOffset, kFaceHeightMin, kFaceHeightMax);
+                inRange(a_scene.face.heightOffset, kFaceHeightMin, kFaceHeightMax) && ValidTint(a_scene.face.tint);
         }
 
         bool ApplyScene(const Scene& a_scene, const std::string& a_name)
