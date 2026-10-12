@@ -1,4 +1,5 @@
 #include "PresetLibrary.h"
+#include "RuntimeModel.h"
 #include "ScenePresets.h"
 #include <Windows.h>
 #include <atomic>
@@ -46,7 +47,7 @@ namespace ScreenshotLightingAssistant
             std::string magic, kind;
             int version{};
             if (!(in >> magic >> kind >> version >> std::quoted(name)) || magic != "SLA" || kind != expected ||
-                (version != 1 && !(sceneVersion && (version == 2 || version == 3))) || !PresetLibrary::ValidName(name)) { return false; }
+                (version != 1 && !(sceneVersion && (version == 2 || version == 3 || version == 4))) || !PresetLibrary::ValidName(name)) { return false; }
             if (sceneVersion) { *sceneVersion = version; }
             return true;
         }
@@ -89,7 +90,7 @@ namespace ScreenshotLightingAssistant
         if (!entry.includeFace) { face.basis = FaceLightBasis::Camera; }
         // Keep legacy camera-only files byte-compatible. Head mode needs a versioned field;
         // old builds reject it safely instead of silently using the wrong placement.
-        const int version = face.tint != LightTint{1, 1, 1} ? 3 :
+        const int version = entry.screenPlacement ? 4 : face.tint != LightTint{1, 1, 1} ? 3 :
             face.basis == FaceLightBasis::Camera ? 1 : 2;
         auto out = Output("SCENE", entry.name, version);
         out << entry.includeFace << '\n';
@@ -102,7 +103,17 @@ namespace ScreenshotLightingAssistant
         }
         out << face.enabled << ' ' << face.intensity << ' ' << face.range << ' ' << face.heightOffset << '\n';
         if (version >= 2) { out << static_cast<int>(face.basis) << '\n'; }
-        if (version == 3) { out << face.tint.red << ' ' << face.tint.green << ' ' << face.tint.blue << '\n'; }
+        if (version >= 3) { out << face.tint.red << ' ' << face.tint.green << ' ' << face.tint.blue << '\n'; }
+        if (version >= 4) {
+            const auto& screen = *entry.screenPlacement;
+            const auto& light = screen.light;
+            out << screen.enabled << ' ' << screen.normalizedX << ' ' << screen.normalizedY << '\n';
+            out << light.placed << ' ' << light.enabled << ' ' << light.direction << ' ' << light.type << ' '
+                << light.intensity << ' ' << light.range << ' ' << light.distance << ' ' << light.heightOffset << ' '
+                << light.castsShadow << ' ' << light.shadowBias << ' ' << static_cast<int>(light.shadowProjection) << ' '
+                << light.fine.horizontal << ' ' << light.fine.vertical << ' ' << light.fine.depth << '\n';
+            WriteTint(out, light.customTint);
+        }
         return out.str();
     }
     std::optional<SavedLight> PresetLibrary::DecodeLight(const std::string& data)
@@ -140,8 +151,23 @@ namespace ScreenshotLightingAssistant
             // SCENE 1 predates the basis field and always meant camera-relative.
             face.basis = FaceLightBasis::Camera;
         }
-        if (version == 3 && (!(in >> face.tint.red >> face.tint.green >> face.tint.blue) || !ValidTint(face.tint))) {
+        if (version >= 3 && (!(in >> face.tint.red >> face.tint.green >> face.tint.blue) || !ValidTint(face.tint))) {
             return std::nullopt;
+        }
+        if (version >= 4) {
+            ScreenPlacementSettings screen;
+            int projection{};
+            auto& light = screen.light;
+            if (!(in >> screen.enabled >> screen.normalizedX >> screen.normalizedY >>
+                light.placed >> light.enabled >> light.direction >> light.type >> light.intensity >> light.range >>
+                light.distance >> light.heightOffset >> light.castsShadow >> light.shadowBias >> projection >>
+                light.fine.horizontal >> light.fine.vertical >> light.fine.depth) ||
+                !ReadTint(in, light.customTint)) {
+                return std::nullopt;
+            }
+            light.shadowProjection = static_cast<ShadowProjection>(projection);
+            if (!ValidScreenPlacementSettings(screen)) { return std::nullopt; }
+            entry.screenPlacement = screen;
         }
         if (!LightingEditor::IsValidScene(entry.scene) || !End(in)) { return std::nullopt; }
         return entry;
@@ -224,16 +250,21 @@ namespace ScreenshotLightingAssistant
         }
         return true;
     }
-    bool PresetLibrary::SaveScene(std::string name, const Scene& scene, bool includeFace)
+    bool PresetLibrary::SaveScene(std::string name, const Scene& scene, bool includeFace,
+        std::optional<ScreenPlacementSettings> screenPlacement)
     {
         error_.clear();
         if (!ValidName(name)) { error_ = "名前を入力してください（UTF-8で120バイト以内、改行・##は使えません）。"; return false; }
         if (scenes_.size() >= kEntryLimit) { error_ = "プリセット登録は128件までです。不要な登録を外してください。"; return false; }
         if (!LightingEditor::IsValidScene(scene)) { error_ = "無効なライト設定が含まれています。"; return false; }
+        if (screenPlacement && !ValidScreenPlacementSettings(*screenPlacement)) {
+            error_ = "画面配置ライトの設定が無効です。";
+            return false;
+        }
         if (std::any_of(scenes_.begin(), scenes_.end(), [&](const auto& entry) { return entry.name == name; })) {
             error_ = "同じ名前が登録されています。別の名前で登録してください。"; return false;
         }
-        SavedScene entry{std::move(name), scene, includeFace, {}};
+        SavedScene entry{std::move(name), scene, includeFace, {}, std::move(screenPlacement)};
         if (!includeFace) {
             entry.scene.face = {};
             entry.scene.face.basis = FaceLightBasis::Camera;

@@ -48,7 +48,8 @@ namespace ScreenshotLightingAssistant
 
     inline constexpr std::size_t kFaceRuntimeSlot = kManualLightCount;
     inline constexpr std::size_t kPersistentFaceRuntimeSlot = kManualLightCount + 1;
-    inline constexpr std::size_t kRuntimeLightCount = kManualLightCount + 2;
+    inline constexpr std::size_t kScreenPlacementRuntimeSlot = kManualLightCount + 2;
+    inline constexpr std::size_t kRuntimeLightCount = kManualLightCount + 3;
     inline std::optional<LightSettings> RuntimeSettings(const Scene& scene, std::size_t slot)
     {
         if (slot < scene.size()) { return scene[slot]; }
@@ -135,6 +136,20 @@ namespace ScreenshotLightingAssistant
         LightSessionSnapshot state_;
     };
 
+    inline std::size_t ActiveManualLightCount(const LightSessionSnapshot& state)
+    {
+        std::size_t count = 0;
+        for (std::size_t slot = 0; slot < kManualLightCount; ++slot) {
+            if (LightSession::ShouldIlluminate(state, slot)) { ++count; }
+        }
+        return count;
+    }
+
+    inline bool ScreenPlacementMustSwitchOff(bool enabled, std::size_t activeManualLights)
+    {
+        return enabled && activeManualLights >= kManualLightCount;
+    }
+
     // Authored fixed tints, not Kelvin/photometric values. White preserves 0.1.8.
     // UI schematic colors are intentionally separate from renderer diffuse values.
     inline constexpr std::array<LightTint, kLightTypeCount> kRuntimeTints{ {
@@ -171,6 +186,19 @@ namespace ScreenshotLightingAssistant
 
     struct LightVector { float x = 0, y = 0, z = 0; };
     struct CameraBasis { LightVector front; LightVector right; };
+    // Skyrim's conventional 128 units = 6 feet; UI metres remain renderer-independent.
+    inline constexpr float kUnitsPerMetre = 128.0F / 1.8288F;
+    // The cursor maps to one camera-facing plane in front of the subject. Depth
+    // remains subject-relative, so changing it cannot rotate or orbit the light.
+    inline constexpr float kScreenPlacementDepthDefault = 1.0F;
+    inline constexpr float kScreenPlacementDepthMin = 0.25F;
+    inline constexpr float kScreenPlacementDepthMax = 8.0F;
+    inline constexpr float kScreenPlacementCameraMargin = 0.10F;
+    inline constexpr float kScreenPlacementRangeMin = 0.5F;
+    inline constexpr float kScreenPlacementRangeMax = 20.0F;
+    inline constexpr float kScreenPlacementRangeDefault = 6.0F;
+    inline constexpr float kScreenPlacementDistanceWheelStep = 0.03F;
+    inline constexpr float kScreenPlacementDistanceWheelFastStep = 0.20F;
     // NiCamera looks along local +X; +Y is up, +Z is right. The dynamic shadow
     // frustum camera copies the point light's world rotation (see ENGINE_NOTES).
     struct SpotlightBasis { LightVector forward; LightVector up; LightVector right; };
@@ -188,6 +216,128 @@ namespace ScreenshotLightingAssistant
         const float length = std::hypot(p.x, p.y, p.z);
         if (!std::isfinite(length) || length < 0.0001F) { return std::nullopt; }
         return LightVector{ p.x / length, p.y / length, p.z / length };
+    }
+    inline float Dot(LightVector a, LightVector b)
+    {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+    // Intersect the cursor ray with the fixed camera-facing placement plane.
+    inline std::optional<LightVector> ScreenPlacementPosition(LightVector rayOrigin,
+        LightVector rayDirection, LightVector centreRayOrigin,
+        LightVector centreRayDirection, LightVector anchor, float requestedDepth)
+    {
+        if (!Finite(rayOrigin) || !Finite(centreRayOrigin) || !Finite(anchor) ||
+            !std::isfinite(requestedDepth) || requestedDepth < kScreenPlacementDepthMin ||
+            requestedDepth > kScreenPlacementDepthMax) {
+            return std::nullopt;
+        }
+        auto ray = Unit(rayDirection);
+        auto forward = Unit(centreRayDirection);
+        const auto centreToAnchor = Unit({anchor.x - centreRayOrigin.x,
+            anchor.y - centreRayOrigin.y, anchor.z - centreRayOrigin.z});
+        if (!ray || !forward || !centreToAnchor) { return std::nullopt; }
+
+        // WindowPointToRay is the authority for the current rendered camera.
+        // Still orient its result toward the selected subject so a camera whose
+        // local forward convention is reversed cannot place the light behind it.
+        if (Dot(*forward, *centreToAnchor) < 0.0F) {
+            *forward = {-forward->x, -forward->y, -forward->z};
+        }
+        if (Dot(*ray, *forward) < 0.0F) {
+            *ray = {-ray->x, -ray->y, -ray->z};
+        }
+        const LightVector centreToAnchorVector{anchor.x - centreRayOrigin.x,
+            anchor.y - centreRayOrigin.y, anchor.z - centreRayOrigin.z};
+        const float subjectDepth = Dot(centreToAnchorVector, *forward) / kUnitsPerMetre;
+        if (!std::isfinite(subjectDepth) ||
+            subjectDepth <= kScreenPlacementDepthMin + kScreenPlacementCameraMargin) {
+            return std::nullopt;
+        }
+        // Never let a large remembered value cross the current camera. This is
+        // particularly important after loading a preset at a closer camera distance.
+        const float depth = std::clamp(requestedDepth, kScreenPlacementDepthMin,
+            std::min(kScreenPlacementDepthMax, subjectDepth - kScreenPlacementCameraMargin));
+        const LightVector planePoint{
+            anchor.x - forward->x * depth * kUnitsPerMetre,
+            anchor.y - forward->y * depth * kUnitsPerMetre,
+            anchor.z - forward->z * depth * kUnitsPerMetre
+        };
+        const float denominator = Dot(*ray, *forward);
+        if (!std::isfinite(denominator) || std::abs(denominator) < 0.0001F) { return std::nullopt; }
+        const LightVector toPlane{planePoint.x - rayOrigin.x, planePoint.y - rayOrigin.y,
+            planePoint.z - rayOrigin.z};
+        const float distance = Dot(toPlane, *forward) / denominator;
+        if (!std::isfinite(distance) || distance <= 0.0F) { return std::nullopt; }
+        const LightVector result{rayOrigin.x + ray->x * distance,
+            rayOrigin.y + ray->y * distance, rayOrigin.z + ray->z * distance};
+        return Finite(result) ? std::optional(result) : std::nullopt;
+    }
+    inline float ScreenPlacementDistanceAfterWheel(float current, float wheel, bool fast)
+    {
+        if (!std::isfinite(current) || !std::isfinite(wheel)) { return current; }
+        const float step = fast ? kScreenPlacementDistanceWheelFastStep :
+            kScreenPlacementDistanceWheelStep;
+        return std::clamp(current + wheel * step,
+            kScreenPlacementDepthMin, kScreenPlacementDepthMax);
+    }
+    inline bool ValidScreenPlacementLightSettings(const LightSettings& light)
+    {
+        const auto inRange = [](float value, float minimum, float maximum) {
+            return std::isfinite(value) && value >= minimum && value <= maximum;
+        };
+        return light.placed && light.enabled && light.type >= 0 && light.type < kLightTypeCount &&
+            inRange(light.intensity, 0.0F, 3.0F) &&
+            inRange(light.range, kScreenPlacementRangeMin, kScreenPlacementRangeMax) &&
+            inRange(light.distance, kScreenPlacementDepthMin, kScreenPlacementDepthMax) &&
+            inRange(light.shadowBias, kShadowBiasLevels.front(), kShadowBiasLevels.back()) &&
+            ValidProjection(light.shadowProjection) &&
+            (!light.customTint || ValidTint(*light.customTint));
+    }
+    inline LightSettings ScreenPlacementLightSettings(const LightSettings& source)
+    {
+        LightSettings result;
+        result.placed = true;
+        result.enabled = true;
+        result.type = source.type;
+        result.intensity = source.intensity;
+        // A new free light uses a visible, practical placement range. Reopening,
+        // stop/start and preset restore take the remembered-settings path instead.
+        result.range = kScreenPlacementRangeDefault;
+        result.distance = kScreenPlacementDepthDefault;
+        result.castsShadow = source.castsShadow;
+        result.shadowBias = source.shadowBias;
+        result.shadowProjection = source.shadowProjection;
+        result.customTint = source.customTint;
+        return result;
+    }
+    inline LightSettings NormalizeScreenPlacementLightSettings(const LightSettings& source)
+    {
+        auto result = ScreenPlacementLightSettings(source);
+        // Normalization is also used after edits and while rebuilding remembered
+        // lights. Only brand-new placement starts at the 6m default; an existing
+        // value must remain authoritative for both the UI and the runtime light.
+        result.range = source.range;
+        result.distance = source.distance;
+        return result;
+    }
+    inline bool ValidScreenPlacementSettings(const ScreenPlacementSettings& settings)
+    {
+        return std::isfinite(settings.normalizedX) && std::isfinite(settings.normalizedY) &&
+            settings.normalizedX >= 0.0F && settings.normalizedX <= 1.0F &&
+            settings.normalizedY >= 0.0F && settings.normalizedY <= 1.0F &&
+            ValidScreenPlacementLightSettings(settings.light);
+    }
+    inline LightSettings ScreenPlacementLightForBegin(const LightSettings& source,
+        const std::optional<LightSettings>& remembered)
+    {
+        // Screen-placement edits may legally use the wider 0.5-20m range. Reopening
+        // within the same lighting session must therefore prefer the already-
+        // validated placement settings instead of normalizing the selected main light
+        // again (whose normal runtime range is narrower).
+        if (remembered && ValidScreenPlacementLightSettings(*remembered)) {
+            return *remembered;
+        }
+        return ScreenPlacementLightSettings(source);
     }
     inline std::optional<SpotlightBasis> AimSpotlight(LightVector position, LightVector target)
     {
@@ -210,9 +360,6 @@ namespace ScreenshotLightingAssistant
         const LightVector front{ x / length, y / length, 0 };
         return CameraBasis{ front, { -front.y, front.x, 0 } };
     }
-    // Skyrim's conventional 128 units = 6 feet; UI metres remain renderer-independent.
-    inline constexpr float kUnitsPerMetre = 128.0F / 1.8288F;
-
     inline std::optional<LightVector> FaceLightPosition(LightVector head, LightVector camera, float heightOffset)
     {
         if (!Finite(head) || !Finite(camera) || !std::isfinite(heightOffset) ||
@@ -282,5 +429,18 @@ namespace ScreenshotLightingAssistant
         base.fine = {};
         const auto basePosition = LightPosition(anchor, basis, base);
         return basePosition ? AimSpotlight(*basePosition, anchor) : std::nullopt;
+    }
+
+    inline std::optional<SpotlightBasis> AimScreenPlacementSpotlight(
+        LightVector position, LightVector anchor, const LightSettings& light)
+    {
+        // The screen-plane light deliberately has a wider 0.5-20m radius than
+        // the three regular lights (0.5-12m). Do not run it through
+        // LightSession::Valid/AimPlacedSpotlight or a valid value above 12m is
+        // mistaken for corrupt scene data and stops the entire lighting session.
+        if (!Finite(position) || !Finite(anchor) || !ValidScreenPlacementLightSettings(light)) {
+            return std::nullopt;
+        }
+        return AimSpotlight(position, anchor);
     }
 }

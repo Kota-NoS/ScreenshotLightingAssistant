@@ -7,6 +7,14 @@
 
 namespace ScreenshotLightingAssistant::UI
 {
+    template <class LightRange>
+    int VisiblePresetDetailRowCount(const LightRange& a_lights, bool a_screenPlacementEnabled)
+    {
+        return static_cast<int>(std::count_if(a_lights.begin(), a_lights.end(), [](const auto& light) {
+            return light.placed && light.enabled;
+        })) + (a_screenPlacementEnabled ? 1 : 0);
+    }
+
     // Geometry only: test responsive cards without a game or an ImGui context.
     struct PresetCardLayout
     {
@@ -41,10 +49,11 @@ namespace ScreenshotLightingAssistant::UI
         const float labelWidth = a_labelTextWidth + 16.0F;
         const float rowHeight = a_fontHeight + 4.0F;
         constexpr float rowGap = 3.0F;
-        // Reserve all three information rows to keep every card in a grid equal
-        // height, including empty, one-light and two-light presets.
-        (void)a_count;
-        const float rowsHeight = rowHeight * 3.0F + rowGap * 2.0F;
+        // Three regular-light rows keep ordinary cards aligned. A saved screen
+        // placement light adds one explicit fourth row rather than overlapping
+        // the title or diagram.
+        const int rows = std::clamp(a_count, 3, 4);
+        const float rowsHeight = rowHeight * rows + rowGap * (rows - 1);
         const bool horizontal = a_width >= MinimumPresetCardWidth(a_labelTextWidth);
         const float diagram = horizontal ? std::clamp(inner - gap - labelWidth, 144.0F, 168.0F) : std::min(inner, 168.0F);
         const float diagramHeight = diagram + cameraHeight * (diagram / 140.0F);

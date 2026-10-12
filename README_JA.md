@@ -1,6 +1,14 @@
-# Screenshot Lighting Assistant 0.3.0
+# Screenshot Lighting Assistant 0.4.0
 
-Skyrim SE/AEのスクリーンショット撮影向けに、対象Actorの周囲へ3灯の撮影ライトと独立したフェイスライトを配置するSKSEプラグインです。0.3.0は、検証済みalpha54の機能コードを変更せず正式版表記へ昇格したパッケージです。
+Skyrim SE/AEのスクリーンショット撮影向けに、対象Actorの周囲へ3灯の撮影ライト、画面上へ直接置くフリーライト、独立したフェイスライトを配置するSKSEプラグインです。
+
+## 0.4.0正式版
+
+- 既存3灯とは別に、画面上をマウスで指定する4灯目のフリーライトを追加しました。配置中も小窓から強さ、範囲、対象からの距離、色、影方式を即時調整できます。
+- 画面相対位置と設定は撮影停止・再開、ロード、ウィンドウサイズ変更をまたいで保持し、プリセットへ保存できます。通常3灯がすべて点灯した場合はフリーライトのみ安全に消灯します。
+- 専用ホットキーはShift／Ctrl／Altとの組み合わせに対応し、Mod Control Panel全体を表示せず「Screenshot Lighting Assistant」単独ウィンドウを開閉できます。powerofthree's Photo Mode／フリーカメラ中も同じキーで開閉できます。
+- 新規フリーライトの範囲は6.0mです。配置中のホイールは対象からの距離を0.03m、Shift＋ホイールは0.20mずつ調整します。
+- 0.3.0の機能と保存形式を引き継ぎます。縦撮りカメラの試作機能は含みません。
 
 ## 0.3.0正式版
 
@@ -279,7 +287,7 @@ VRには対応していません。ESP、Papyrusスクリプト、ゲームINI�
 ## 導入
 
 1. Skyrimを終了します。
-2. MO2で `ScreenshotLightingAssistant-0.3.0-alpha25-MO2.zip` をインストールします。
+2. MO2で `ScreenshotLightingAssistant-0.4.0-MO2.zip` をインストールします。
 3. 旧版を無効にし、ScreenshotLightingAssistant.dllが二重にならないようにします。
 4. SKSE経由で起動し、Mod Control Panelから `Screenshot Lighting Assistant > Lighting` を開きます。
 

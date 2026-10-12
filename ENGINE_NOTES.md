@@ -1,3 +1,11 @@
+# 0.4.0 — Free Light and standalone window
+
+- Adds a fourth screen-placement light without replacing the three subject-relative lights. Its normalized screen position, intensity, range, distance, colour, shadow mode and enabled state participate in session and preset persistence.
+- Adds a compact live editor during placement, cursor/window hit testing, safe teardown during load and main-menu transitions, and automatic suspension while all three regular lights are enabled.
+- Adds a configurable modifier-aware hotkey and a standalone `Screenshot Lighting Assistant` window with its own close button.
+- New Free Lights default to a 6.0 m range. Placement wheel steps are 0.03 m for distance and 0.20 m with Shift. Existing values are never reset merely by reopening placement.
+- Preserves the 0.3.0 storage contract and excludes the separate portrait-camera prototype.
+
 # 0.3.0 — public release
 
 - Promotes the in-game validated alpha54 code to the public 0.3.0 identity. Only version-facing strings, release documentation and package names change.

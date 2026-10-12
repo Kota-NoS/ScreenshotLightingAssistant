@@ -58,10 +58,26 @@ namespace ScreenshotLightingAssistant::UI
         bool g_focusPhotoEffectWindow{ false };
         bool g_screenOverlayWindowOpen{ false };
         bool g_focusScreenOverlayWindow{ false };
+        bool g_toolHotkeyWindowOpen{ false };
+        bool g_focusToolHotkeyWindow{ false };
         ScreenOverlaySettings g_screenOverlay{};
         ScreenOverlayLayer g_screenOverlayDetail{ ScreenOverlayLayer::Vignette };
         SKSEMenuFramework::Model::InputEvent* g_frameworkInputEvent{};
         SKSEMenuFramework::Model::HudElement* g_screenOverlayHudElement{};
+        SKSEMenuFramework::Model::HudElement* g_screenPlacementHudElement{};
+        SKSEMenuFramework::Model::HudElement* g_toolWindowToggleHudElement{};
+        SKSEMenuFramework::Model::WindowInterface* g_mainWindow{};
+        SKSEMenuFramework::Model::WindowInterface* g_screenPlacementWindow{};
+        SKSEMenuFramework::Model::WindowInterface* g_toolWindow{};
+        bool g_toolWindowWasOpen{};
+        bool g_returnToMainAfterScreenPlacement{};
+        bool g_returnToToolWindowAfterScreenPlacement{};
+        bool g_editScreenPlacement{};
+        bool g_skipScreenPlacementClick{};
+        bool g_screenPlacementPanelVisible{};
+        bool g_screenPlacementColorPopupVisible{};
+        ImVec2 g_screenPlacementPanelMin{};
+        ImVec2 g_screenPlacementPanelMax{};
         std::unique_ptr<PresetLibrary> g_library;
         bool g_openPresetRequested{};
         bool g_openLightLibraryRequested{};
@@ -70,6 +86,7 @@ namespace ScreenshotLightingAssistant::UI
         bool g_registerScene{};
         bool g_saveFace{};
         Scene g_registrationSnapshot{};
+        std::optional<ScreenPlacementSettings> g_registrationScreenPlacement;
         int g_registrationSlot{};
         std::array<char, 121> g_registrationName{};
         std::string g_registrationError;
@@ -82,11 +99,13 @@ namespace ScreenshotLightingAssistant::UI
         {
             if (!event || event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { return false; }
             const auto* button = event->AsButtonEvent();
-            if (!button || !button->IsDown()) { return false; }
+            if (!button) { return false; }
             if (event->GetDevice() == RE::INPUT_DEVICE::kKeyboard) {
-                return RuntimeLight::CapturePersistentHotkey(button->GetIDCode());
+                if (button->IsDown() && RuntimeLight::CapturePersistentHotkey(button->GetIDCode())) { return true; }
+                return RuntimeLight::HandleToolWindowKeyboardEvent(button->GetIDCode(),
+                    button->IsPressed(), button->IsDown());
             }
-            if (event->GetDevice() == RE::INPUT_DEVICE::kGamepad) {
+            if (event->GetDevice() == RE::INPUT_DEVICE::kGamepad && button->IsDown()) {
                 return RuntimeLight::CapturePersistentGamepadHotkey(button->GetIDCode());
             }
             return false;
@@ -210,7 +229,8 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
-        void DrawDirectionDiagram(const Scene& a_scene, const ImVec2& origin, float canvasSize, bool a_interactive)
+        void DrawDirectionDiagram(const Scene& a_scene, const ImVec2& origin, float canvasSize, bool a_interactive,
+            std::optional<bool> a_screenPlacementEnabled = std::nullopt)
         {
             const float diagramScale = a_interactive ? 1.0F : PresetDiagramScale(canvasSize);
             const float ringRadius = canvasSize * 0.36F;
@@ -236,6 +256,7 @@ namespace ScreenshotLightingAssistant::UI
                     ImGuiMCP::SetCursorScreenPos({ nodeCenter.x - nodeRadius, nodeCenter.y - nodeRadius });
                     ImGuiMCP::PushID(static_cast<int>(index));
                     if (ImGuiMCP::InvisibleButton(direction.id, { nodeRadius * 2.0F, nodeRadius * 2.0F })) {
+                        g_editScreenPlacement = false;
                         g_editor.ActivateDirection(static_cast<int>(index));
                     }
                     hovered = ImGuiMCP::IsItemHovered();
@@ -249,6 +270,7 @@ namespace ScreenshotLightingAssistant::UI
                             occupied ? Tr("ここへ重ねて移動") : Tr("ここへ移動"));
                         if (ImGuiMCP::MenuItem(label.c_str(), nullptr, false,
                                 g_editor.CurrentLight().direction != static_cast<int>(index))) {
+                            g_editScreenPlacement = false;
                             g_editor.SetDirection(static_cast<int>(index));
                         }
                         ImGuiMCP::EndPopup();
@@ -296,12 +318,33 @@ namespace ScreenshotLightingAssistant::UI
             }
 
             if (!a_interactive) {
-                DrawCameraIcon(drawList, { center.x, origin.y + canvasSize + 8.0F * diagramScale }, diagramScale);
+                const ImVec2 cameraCenter{ center.x, origin.y + canvasSize + 8.0F * diagramScale };
+                if (a_screenPlacementEnabled) {
+                    const auto tint = *a_screenPlacementEnabled ? Color(255, 196, 82) : Color(125, 141, 158);
+                    const float radius = 12.0F * diagramScale;
+                    ImGuiMCP::ImDrawListManager::AddCircleFilled(drawList, cameraCenter, radius,
+                        Color(26, 33, 43), 28);
+                    ImGuiMCP::ImDrawListManager::AddCircle(drawList, cameraCenter, radius, tint, 28,
+                        1.5F * diagramScale);
+                }
+                DrawCameraIcon(drawList, cameraCenter, diagramScale);
+                if (a_screenPlacementEnabled && !*a_screenPlacementEnabled) {
+                    ImGuiMCP::ImDrawListManager::AddLine(drawList,
+                        {cameraCenter.x - 8.0F * diagramScale, cameraCenter.y + 8.0F * diagramScale},
+                        {cameraCenter.x + 8.0F * diagramScale, cameraCenter.y - 8.0F * diagramScale},
+                        Color(125, 141, 158), 1.5F * diagramScale);
+                }
             }
         }
 
         float ButtonWidth(const char* a_label);
         void DrawPositionWindowButton();
+        void DrawScreenPlacementLauncher(const RuntimeLight::View& runtime, const ImVec2& center);
+        void UpdateScreenPlacementInteraction(bool controlsCaptureMouse = false);
+        void __stdcall RenderScreenPlacementWindow();
+        void __stdcall Render();
+        void __stdcall RenderToolWindow();
+        void __stdcall ProcessToolWindowToggle();
 
         float PersistentFaceLauncherWidth()
         {
@@ -535,14 +578,15 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
-        void DrawDirectionSelector(float a_canvasSize, bool& anyActive)
+        void DrawDirectionSelector(float a_canvasSize, bool& anyActive, const RuntimeLight::View& runtime)
         {
             const float canvasSize = std::clamp(a_canvasSize, 310.0F, 430.0F);
             const auto origin = ImGuiMCP::GetCursorScreenPos();
             DrawDirectionDiagram(g_editor.GetScene(), origin, canvasSize, true);
             DrawFaceControls(origin, canvasSize, anyActive);
             const auto footer = CalculateDiagramFooter(canvasSize, ImGuiMCP::GetFrameHeight());
-            DrawCameraIcon(ImGuiMCP::GetWindowDrawList(), { origin.x + footer.cameraX, origin.y + footer.cameraY });
+            DrawScreenPlacementLauncher(runtime,
+                { origin.x + footer.cameraX, origin.y + footer.cameraY });
             // Reserve the camera row, followed by the left-column action row.
             ImGuiMCP::SetCursorScreenPos({ origin.x, origin.y + footer.height });
             ImGuiMCP::Dummy({ canvasSize, 0.0F });
@@ -630,6 +674,51 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::EndDisabled();
         }
 
+        float RemoveScreenPlacementButtonWidth()
+        {
+            return ButtonWidth(Tr("フリーライト")) + ImGuiMCP::GetStyle()->ItemInnerSpacing.x +
+                ImGuiMCP::GetFontSize();
+        }
+
+        void DrawRemoveScreenPlacementButton(bool remembered)
+        {
+            const float font = ImGuiMCP::GetFontSize();
+            const auto* style = ImGuiMCP::GetStyle();
+            ImGuiMCP::BeginDisabled(!remembered);
+            const bool clicked = SelectableButton("##remove_screen_placement_light", false,
+                RemoveScreenPlacementButtonWidth(), true);
+            const auto start = ImGuiMCP::GetItemRectMin();
+            const auto end = ImGuiMCP::GetItemRectMax();
+            auto* draw = ImGuiMCP::GetWindowDrawList();
+            const auto tint = ImGuiMCP::GetColorU32(ImGuiMCP::ImGuiCol_Text);
+            const float y = (start.y + end.y - font) * .5F;
+            ImGuiMCP::ImDrawListManager::AddText(draw, ImGuiMCP::GetFont(), font,
+                {start.x + style->FramePadding.x, y}, tint, Tr("フリーライト"));
+            const float x = end.x - style->FramePadding.x - font;
+            const float stroke = std::max(1.0F, font * .065F);
+            const auto line = [&](float x1, float y1, float x2, float y2) {
+                ImGuiMCP::ImDrawListManager::AddLine(draw,
+                    {x + x1 * font, y + y1 * font}, {x + x2 * font, y + y2 * font}, tint, stroke);
+            };
+            line(.16F, .25F, .84F, .25F);
+            line(.38F, .13F, .62F, .13F);
+            line(.38F, .13F, .38F, .25F);
+            line(.62F, .13F, .62F, .25F);
+            line(.24F, .34F, .30F, .87F);
+            line(.30F, .87F, .70F, .87F);
+            line(.70F, .87F, .76F, .34F);
+            line(.42F, .39F, .44F, .74F);
+            line(.58F, .39F, .56F, .74F);
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip(Tr("フリーライトを削除します。位置と設定も消去されます。登録済みプリセットは削除しません。"));
+            }
+            if (clicked) {
+                RuntimeLight::RemoveScreenPlacement();
+                g_editScreenPlacement = false;
+            }
+            ImGuiMCP::EndDisabled();
+        }
+
         void DrawPowerButton(int a_slot, float a_width)
         {
             const auto origin = ImGuiMCP::GetCursorScreenPos();
@@ -683,6 +772,7 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::PushID(slot);
                 const auto label = std::to_string(slot + 1);
                 if (SelectableButton(label.c_str(), g_editor.SelectedSlot() == slot, slotWidth)) {
+                    g_editScreenPlacement = false;
                     g_editor.SelectSlot(slot);
                 }
                 if (ImGuiMCP::IsItemHovered()) {
@@ -697,7 +787,26 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
-        void DrawLightSelection(float a_buttonWidth)
+        const LightSettings& SelectedLight(const RuntimeLight::View& runtime)
+        {
+            return g_editScreenPlacement && runtime.screenPlacement.settingsRemembered ?
+                runtime.screenPlacement.light : g_editor.CurrentLight();
+        }
+
+        void ApplySelectedLightRecipe(const RuntimeLight::View& runtime, int type,
+            std::optional<LightTint> tint = std::nullopt)
+        {
+            if (g_editScreenPlacement && runtime.screenPlacement.settingsRemembered) {
+                auto light = runtime.screenPlacement.light;
+                light.type = type;
+                light.customTint = tint;
+                RuntimeLight::SetScreenPlacementSettings(light);
+            } else {
+                g_editor.ApplyLightRecipe(type, tint);
+            }
+        }
+
+        void DrawLightSelection(float a_buttonWidth, const RuntimeLight::View& runtime)
         {
             ImGuiMCP::AlignTextToFramePadding();
             ImGuiMCP::Text(Tr("2. ライト選択"));
@@ -705,9 +814,9 @@ namespace ScreenshotLightingAssistant::UI
                 Tooltip(Tr("選択中の番号へライトを配置・変更します。\n白・暖色・ろうそく色・青の固定光です。位置・強さ・範囲・影は保持します。\nろうそくの揺らぎはありません。フェイスライトの色は変えません。"));
             }
             for (const int type : kLightDisplayOrder) {
-                const auto& light = g_editor.CurrentLight();
+                const auto& light = SelectedLight(runtime);
                 if (SelectableButton(Tr(kLightTypes[type].name), light.placed && light.type == type && !light.customTint, a_buttonWidth)) {
-                    g_editor.SetType(type);
+                    ApplySelectedLightRecipe(runtime, type);
                 }
             }
             ImGuiMCP::AlignTextToFramePadding();
@@ -726,12 +835,12 @@ namespace ScreenshotLightingAssistant::UI
                     for (const auto index : favorites) {
                         const auto& entry = g_library->Lights()[index];
                         ImGuiMCP::PushID(static_cast<int>(index));
-                        const auto& current = g_editor.CurrentLight();
+                        const auto& current = SelectedLight(runtime);
                         const bool selected = current.placed && current.type == entry.type && current.customTint == entry.tint;
                         if (selected) { ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, Color(112, 80, 32)); }
                         // Fixed width clips long names; full name remains in tooltip.
                         if (ImGuiMCP::Button(entry.name.c_str(), {a_buttonWidth, 0})) {
-                            g_editor.ApplyLightRecipe(entry.type, entry.tint);
+                            ApplySelectedLightRecipe(runtime, entry.type, entry.tint);
                         }
                         if (selected) { ImGuiMCP::PopStyleColor(); }
                         if (ImGuiMCP::IsItemHovered()) {
@@ -743,17 +852,161 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
-        void DrawLightActions(float width)
+        void RestoreScreenPlacementMenu()
         {
-            const float actionGap = ImGuiMCP::GetStyle()->ItemSpacing.x + ImGuiMCP::GetFontSize() * .8F;
-            DrawPositionWindowButton();
-            if (FitsInline(width, ButtonWidth(Tr("微調整")), RemoveLightButtonWidth(), actionGap)) {
-                ImGuiMCP::SameLine(0, actionGap);
-            }
-            DrawRemoveLightButton();
+            if (g_screenPlacementWindow) { g_screenPlacementWindow->IsOpen = false; }
+            if (g_returnToMainAfterScreenPlacement && g_mainWindow) { g_mainWindow->IsOpen = true; }
+            if (g_returnToToolWindowAfterScreenPlacement && g_toolWindow) { g_toolWindow->IsOpen = true; }
+            g_returnToMainAfterScreenPlacement = false;
+            g_returnToToolWindowAfterScreenPlacement = false;
+            g_skipScreenPlacementClick = false;
         }
 
-        void DrawPlacementAndLightSelection(bool& anyActive)
+        bool BeginScreenPlacementUi(const LightSettings& light)
+        {
+            if (!RuntimeLight::BeginScreenPlacement(light)) { return false; }
+            g_editScreenPlacement = true;
+            g_positionWindowOpen = false;
+            if (const auto* viewport = ImGuiMCP::GetMainViewport();
+                viewport && viewport->Size.x >= 2.0F && viewport->Size.y >= 2.0F) {
+                const auto screen = RuntimeLight::GetView().screenPlacement;
+                const float x = std::clamp(screen.normalizedX, 0.0F, 1.0F) *
+                    (viewport->Size.x - 1.0F);
+                const float y = std::clamp(screen.normalizedY, 0.0F, 1.0F) *
+                    (viewport->Size.y - 1.0F);
+                ImGuiMCP::TeleportMousePos({viewport->Pos.x + x, viewport->Pos.y + y});
+                RuntimeLight::UpdateScreenPlacement(x, y, viewport->Size.x, viewport->Size.y);
+            }
+            g_skipScreenPlacementClick = true;
+            if (g_screenPlacementWindow) {
+                g_returnToMainAfterScreenPlacement = g_mainWindow && g_mainWindow->IsOpen.load();
+                g_returnToToolWindowAfterScreenPlacement = g_toolWindow && g_toolWindow->IsOpen.load();
+                g_screenPlacementWindow->IsOpen = true;
+                if (g_mainWindow) { g_mainWindow->IsOpen = false; }
+                if (g_toolWindow) { g_toolWindow->IsOpen = false; }
+            }
+            return true;
+        }
+
+        void DrawScreenPlacementLauncher(const RuntimeLight::View& runtime, const ImVec2& center)
+        {
+            const auto activeManual = ActiveManualLightCount(runtime.session);
+            const bool remembered = runtime.screenPlacement.settingsRemembered &&
+                runtime.screenPlacement.positionRemembered;
+            const bool canCreate = runtime.session.ready && !runtime.session.blocked && runtime.session.running &&
+                activeManual < kManualLightCount;
+            const bool canEnable = remembered && runtime.session.ready && !runtime.session.blocked &&
+                (!runtime.session.running || runtime.screenPlacement.enabled || activeManual < kManualLightCount);
+            const float size = ImGuiMCP::GetFrameHeight();
+            constexpr float gap = 3.0F;
+            const float totalWidth = size * 2.0F + gap;
+            const ImVec2 top{center.x - totalWidth * .5F, center.y - size * .5F};
+            ImGuiMCP::SetCursorScreenPos(top);
+            ImGuiMCP::BeginDisabled(!remembered && !canCreate);
+            const bool clicked = ImGuiMCP::InvisibleButton("##screen_placement_light", {size, size});
+            const bool hovered = ImGuiMCP::IsItemHovered() || ImGuiMCP::IsItemFocused();
+            ImGuiMCP::EndDisabled();
+
+            auto* draw = ImGuiMCP::GetWindowDrawList();
+            const ImVec2 end{top.x + size, top.y + size};
+            const bool selected = remembered && g_editScreenPlacement;
+            ImGuiMCP::ImDrawListManager::AddRectFilled(draw, top, end,
+                (!remembered && !canCreate) ? Color(18, 23, 30) : selected ? Color(112, 80, 32) :
+                hovered ? Color(43, 55, 69) : Color(26, 33, 43), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRect(draw, top, end,
+                selected ? Color(255, 202, 102) : hovered && (remembered || canCreate) ?
+                Color(150, 189, 220) : Color(78, 94, 111), 4.0F, 0, 1.5F);
+            const ImVec2 cameraCenter{top.x + size * .5F, center.y};
+            DrawCameraIcon(draw, cameraCenter, std::max(.85F, size / 36.0F));
+            const auto rayTint = runtime.screenPlacement.enabled ? Color(255, 202, 102) :
+                (remembered || canCreate) ? Color(160, 215, 240) : Color(78, 94, 111);
+            const float radius = size * .38F;
+            for (int index = 0; index < 3; ++index) {
+                const float angle = (-55.0F + index * 55.0F) * std::numbers::pi_v<float> / 180.0F;
+                const ImVec2 a{cameraCenter.x + std::cos(angle) * radius,
+                    cameraCenter.y + std::sin(angle) * radius};
+                const ImVec2 b{cameraCenter.x + std::cos(angle) * (radius + 3.0F),
+                    cameraCenter.y + std::sin(angle) * (radius + 3.0F)};
+                ImGuiMCP::ImDrawListManager::AddLine(draw, a, b, rayTint, 1.5F);
+            }
+
+            if (clicked) {
+                if (remembered) {
+                    BeginScreenPlacementUi(runtime.screenPlacement.light);
+                } else if (canCreate) {
+                    BeginScreenPlacementUi(g_editor.CurrentLight());
+                }
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                if (remembered) {
+                    Tooltip(Tr("フリーライトの前回位置から画面配置を開きます。確定後は通常メニューの編集対象になります。"));
+                } else if (!runtime.session.running) {
+                    Tooltip(Tr("先に撮影ライトを開始してください。"));
+                } else if (activeManual >= kManualLightCount) {
+                    Tooltip(Tr("Light 1～3がすべて点灯中です。どれか1灯をOFFまたは削除すると使用できます。"));
+                } else {
+                    Tooltip(Tr("選択中ライトを元にする画面配置ライトです。\nクリックすると前回位置で配置を開きます。小窓で強さ・範囲・距離・影・色を調整し、小窓外ではホイールで距離を0.03m、Shift＋ホイールで0.20mずつ調整します。左クリックで確定、右クリックで消灯します。\n撮影ライトの停止・ロード後もゲーム中の調整値を保持し、プリセット登録で次回起動にも復元できます。Light 1～3・履歴は変更しません。"));
+                }
+            }
+
+            const ImVec2 powerTop{top.x + size + gap, top.y};
+            ImGuiMCP::SetCursorScreenPos(powerTop);
+            ImGuiMCP::BeginDisabled(!canEnable);
+            const bool powerClicked = ImGuiMCP::InvisibleButton("##screen_placement_power", {size, size});
+            const bool powerHovered = ImGuiMCP::IsItemHovered() || ImGuiMCP::IsItemFocused();
+            ImGuiMCP::EndDisabled();
+            const ImVec2 powerEnd{powerTop.x + size, powerTop.y + size};
+            ImGuiMCP::ImDrawListManager::AddRectFilled(draw, powerTop, powerEnd,
+                !canEnable ? Color(18, 23, 30) : runtime.screenPlacement.enabled ? Color(112, 80, 32) :
+                powerHovered ? Color(43, 55, 69) : Color(26, 33, 43), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRect(draw, powerTop, powerEnd,
+                runtime.screenPlacement.enabled ? Color(255, 202, 102) : powerHovered && canEnable ?
+                Color(150, 189, 220) : Color(78, 94, 111), 4.0F, 0, 1.5F);
+            const ImVec2 powerCenter{powerTop.x + size * .5F, powerTop.y + size * .5F};
+            const float powerRadius = size * .20F;
+            const auto powerTint = runtime.screenPlacement.enabled ? Color(255, 208, 113) :
+                canEnable ? Color(137, 151, 167) : Color(66, 75, 86);
+            ImGuiMCP::ImDrawListManager::AddCircle(draw, powerCenter, powerRadius, powerTint, 24, 1.8F);
+            ImGuiMCP::ImDrawListManager::AddLine(draw,
+                {powerCenter.x, powerCenter.y - powerRadius * 1.35F},
+                {powerCenter.x, powerCenter.y - powerRadius * .15F}, powerTint, 2.0F);
+            if (powerClicked && canEnable) {
+                RuntimeLight::SetScreenPlacementEnabled(!runtime.screenPlacement.enabled);
+                g_editScreenPlacement = true;
+                g_positionWindowOpen = false;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip(Tr("フリーライトをON/OFFします。OFFでも位置・強さ・範囲・距離・色・影を保持し、編集できます。"));
+            }
+        }
+
+        void DrawLightActions(float width, const RuntimeLight::View& runtime)
+        {
+            const float actionGap = ImGuiMCP::GetStyle()->ItemSpacing.x + ImGuiMCP::GetFontSize() * .8F;
+            ActionRowLayout row{width, actionGap};
+            row.Place(ButtonWidth(Tr("微調整")));
+            if (g_editScreenPlacement && runtime.screenPlacement.settingsRemembered) {
+                const auto activeManual = ActiveManualLightCount(runtime.session);
+                const bool canPlace = runtime.session.ready && !runtime.session.blocked &&
+                    runtime.session.running && activeManual < kManualLightCount;
+                ImGuiMCP::BeginDisabled(!canPlace);
+                if (SelectableButton(Tr("微調整"), runtime.screenPlacement.positioning)) {
+                    BeginScreenPlacementUi(runtime.screenPlacement.light);
+                }
+                ImGuiMCP::EndDisabled();
+                if (ImGuiMCP::IsItemHovered()) {
+                    Tooltip(Tr("フリーライトの前回位置から画面配置を開きます。"));
+                }
+                if (row.Place(RemoveScreenPlacementButtonWidth())) { ImGuiMCP::SameLine(0, actionGap); }
+                DrawRemoveScreenPlacementButton(runtime.screenPlacement.settingsRemembered);
+            } else {
+                DrawPositionWindowButton();
+                if (row.Place(RemoveLightButtonWidth())) { ImGuiMCP::SameLine(0, actionGap); }
+                DrawRemoveLightButton();
+            }
+        }
+
+        void DrawPlacementAndLightSelection(bool& anyActive, const RuntimeLight::View& runtime)
         {
             const float favoriteHeaderWidth = ImGuiMCP::CalcTextSize(Tr("お気に入り")).x + ImGuiMCP::GetStyle()->ItemSpacing.x + ButtonWidth(Tr("管理"));
             const float selectionWidth = std::max(ButtonWidth(Tr("スタジオ暖色")), favoriteHeaderWidth);
@@ -770,22 +1023,22 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::BeginGroup(); // Reserve the taller of diagram and favorites.
             ImGuiMCP::BeginGroup();
             DrawSlotSelector(directionWidth);
-            DrawDirectionSelector(directionWidth, anyActive);
+            DrawDirectionSelector(directionWidth, anyActive, runtime);
             // Actions share vertical space with favorite 5 instead of following it.
-            if (sideBySide) { DrawLightActions(directionWidth); }
+            if (sideBySide) { DrawLightActions(directionWidth, runtime); }
             ImGuiMCP::EndGroup();
 
             if (sideBySide) {
                 ImGuiMCP::SameLine(0.0F, columnGap);
                 ImGuiMCP::BeginGroup();
-                DrawLightSelection(selectionWidth);
+                DrawLightSelection(selectionWidth, runtime);
                 ImGuiMCP::EndGroup();
             } else {
                 ImGuiMCP::Spacing();
-                DrawLightSelection(selectionWidth);
+                DrawLightSelection(selectionWidth, runtime);
             }
             ImGuiMCP::EndGroup();
-            if (!sideBySide) { DrawLightActions(availableWidth); }
+            if (!sideBySide) { DrawLightActions(availableWidth, runtime); }
         }
 
         void DrawNumeric(const char* a_label, NumericField a_field, float a_min, float a_max, const char* a_format, bool& a_anyActive)
@@ -913,15 +1166,45 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
-        bool DrawPresetCard(const ScenePreset& a_preset, float a_width, float a_labelTextWidth, bool includeFace = false)
+        void DrawPresetScreenPlacementLabel(ImDrawList* drawList, const ImVec2& origin,
+            float width, float height, const ScreenPlacementSettings& screen)
+        {
+            const auto rgb = DisplayTint(screen.light);
+            const auto accent = screen.enabled ? Color(rgb[0], rgb[1], rgb[2]) : Color(107, 120, 137);
+            ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, origin,
+                {origin.x + width, origin.y + height}, Color(28, 39, 53), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddRectFilled(drawList,
+                {origin.x, origin.y + 5.0F}, {origin.x + 3.0F, origin.y + height - 5.0F}, accent, 1.0F, 0);
+            const float iconScale = std::max(.65F, ImGuiMCP::GetFontSize() / 28.0F);
+            const ImVec2 iconCenter{origin.x + 15.0F * iconScale, origin.y + height * .5F};
+            DrawCameraIcon(drawList, iconCenter, iconScale);
+            if (!screen.enabled) {
+                ImGuiMCP::ImDrawListManager::AddLine(drawList,
+                    {iconCenter.x - 7.0F * iconScale, iconCenter.y + 7.0F * iconScale},
+                    {iconCenter.x + 7.0F * iconScale, iconCenter.y - 7.0F * iconScale}, accent,
+                    1.4F * iconScale);
+            }
+            const auto label = ShortLightName(screen.light);
+            const auto size = ImGuiMCP::CalcTextSize(label);
+            const float textX = origin.x + 31.0F * iconScale;
+            const float scale = std::min(1.0F, std::max(1.0F, origin.x + width - textX - 8.0F) /
+                std::max(1.0F, size.x));
+            ImGuiMCP::ImDrawListManager::AddText(drawList, ImGuiMCP::GetFont(),
+                ImGuiMCP::GetFontSize() * scale,
+                {textX, origin.y + (height - size.y * scale) * .5F},
+                screen.enabled ? Color(225, 234, 243) : Color(127, 141, 157), label);
+        }
+
+        bool DrawPresetCard(const ScenePreset& a_preset, float a_width, float a_labelTextWidth,
+            bool includeFace = false,
+            std::optional<ScreenPlacementSettings> screenPlacement = std::nullopt)
         {
             const char* displayName = std::string_view(a_preset.id) == "user" ? a_preset.name : Tr(a_preset.name);
             const float font = ImGuiMCP::GetFontSize();
-            int placed = 0;
-            for (const auto& light : a_preset.scene) {
-                placed += light.placed ? 1 : 0;
-            }
-            const auto layout = CalculatePresetCardLayout(a_width, font, a_labelTextWidth, placed);
+            const bool showScreenPlacementDetail = screenPlacement && screenPlacement->enabled;
+            const int detailRows = VisiblePresetDetailRowCount(a_preset.scene,
+                showScreenPlacementDetail);
+            const auto layout = CalculatePresetCardLayout(a_width, font, a_labelTextWidth, detailRows);
             const float height = layout.height;
             const auto origin = ImGuiMCP::GetCursorScreenPos();
             const bool clicked = ImGuiMCP::Button("##card", { a_width, height });
@@ -931,7 +1214,8 @@ namespace ScreenshotLightingAssistant::UI
                 auto* drawList = ImGuiMCP::GetWindowDrawList();
                 const ImVec2 end{ origin.x + a_width, origin.y + height };
                 const bool matches = a_preset.scene.lights == g_editor.GetScene().lights &&
-                    (!includeFace || a_preset.scene.face == g_editor.GetScene().face);
+                    (!includeFace || a_preset.scene.face == g_editor.GetScene().face) &&
+                    screenPlacement == RuntimeLight::GetScreenPlacementPreset();
                 ImGuiMCP::ImDrawListManager::AddRectFilled(drawList, origin, end, hovered ? Color(35, 47, 62) : Color(20, 28, 39), 8.0F, 0);
                 ImGuiMCP::ImDrawListManager::AddRect(drawList, origin, end,
                     (hovered || focused) ? Color(255, 207, 113) : (matches ? Color(158, 125, 66) : Color(65, 82, 104)), 8.0F, 0, 2.0F);
@@ -942,16 +1226,24 @@ namespace ScreenshotLightingAssistant::UI
                         { origin.x + layout.titleX, origin.y + layout.titleY + font * line },
                         Color(239, 244, 250), title[line].c_str());
                 }
-                DrawDirectionDiagram(a_preset.scene, { origin.x + layout.diagramX, origin.y + layout.diagramY }, layout.diagramSize, false);
+                DrawDirectionDiagram(a_preset.scene,
+                    {origin.x + layout.diagramX, origin.y + layout.diagramY}, layout.diagramSize, false,
+                    screenPlacement ? std::optional(screenPlacement->enabled) : std::nullopt);
                 int row = 0;
                 for (int slot = 0; slot < static_cast<int>(a_preset.scene.size()); ++slot) {
                     const auto& light = a_preset.scene[slot];
-                    if (!light.placed) {
+                    if (!light.placed || !light.enabled) {
                         continue;
                     }
                     DrawPresetLightLabel(drawList, { origin.x + layout.labelsX, origin.y + layout.labelsY + row * (layout.rowHeight + layout.rowGap) },
                         layout.labelsWidth, layout.rowHeight, slot, light);
                     ++row;
+                }
+                if (showScreenPlacementDetail) {
+                    DrawPresetScreenPlacementLabel(drawList,
+                        {origin.x + layout.labelsX,
+                            origin.y + layout.labelsY + row * (layout.rowHeight + layout.rowGap)},
+                        layout.labelsWidth, layout.rowHeight, *screenPlacement);
                 }
             }
             if (hovered) {
@@ -961,6 +1253,11 @@ namespace ScreenshotLightingAssistant::UI
                 ImGuiMCP::TextUnformatted(Tr(a_preset.description));
                 ImGuiMCP::TextUnformatted(g_managePresets ? Tr("管理中はカードを押しても照明を変えません。") :
                     includeFace ? Tr("クリックで3灯とフェイスライトを適用します。") : Tr("クリックで3灯を適用します。フェイス設定は保持します。"));
+                if (screenPlacement) {
+                    ImGuiMCP::Text("%s : %s / X %.3f / Y %.3f / %.2f m", Tr("画面配置ライト"),
+                        screenPlacement->enabled ? "ON" : "OFF", screenPlacement->normalizedX,
+                        screenPlacement->normalizedY, screenPlacement->light.distance);
+                }
                 for (int slot = 0; slot < 3; ++slot) {
                     const auto& light = a_preset.scene[slot];
                     if (!light.placed) { continue; }
@@ -1087,7 +1384,8 @@ namespace ScreenshotLightingAssistant::UI
                         ImGuiMCP::PushID(static_cast<int>(index));
                         ImGuiMCP::BeginGroup();
                         const ScenePreset card{"user", entry.name.c_str(), entry.includeFace ? Tr("フェイスライトを含む") : Tr("通常3灯のみ"), entry.scene};
-                        if (DrawPresetCard(card, cardWidth, labelTextWidth, entry.includeFace)) { selectedUser = index; }
+                        if (DrawPresetCard(card, cardWidth, labelTextWidth, entry.includeFace,
+                                entry.screenPlacement)) { selectedUser = index; }
                         if (g_managePresets) {
                             ActionRowLayout actions{cardWidth, gap};
                             NextAction(actions, Tr("前へ"));
@@ -1145,8 +1443,14 @@ namespace ScreenshotLightingAssistant::UI
                         ImGuiMCP::SameLine();
                     }
                 }
-                if (selected) { g_presetPicker.Choose(*selected, g_editor); }
+                if (selected && g_presetPicker.Choose(*selected, g_editor)) {
+                    RuntimeLight::ApplyScreenPlacementPreset(std::nullopt);
+                    g_editScreenPlacement = false;
+                }
                 if (selectedUser && PresetLibrary::Apply(g_library->Scenes()[*selectedUser], g_editor)) {
+                    RuntimeLight::ApplyScreenPlacementPreset(
+                        g_library->Scenes()[*selectedUser].screenPlacement);
+                    g_editScreenPlacement = g_library->Scenes()[*selectedUser].screenPlacement.has_value();
                     g_presetPicker.Applied();
                 }
                 if (removeUser) {
@@ -1188,8 +1492,13 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_PopupBg, Color(12, 18, 27));
             bool open = true;
             if (ImGuiMCP::BeginPopupModal(Tr("登録ライト一覧###sla_library"), &open, ImGuiMCP::ImGuiWindowFlags_NoCollapse)) {
-                ImGuiMCP::TextWrapped(Tr("適用先 : Light %d / 登録 %zu 件 / お気に入り %zu / %zu"), g_editor.SelectedSlot() + 1,
-                    g_library->Lights().size(), g_library->Favorites().size(), PresetLibrary::kFavoriteLimit);
+                if (g_editScreenPlacement && RuntimeLight::GetView().screenPlacement.settingsRemembered) {
+                    ImGuiMCP::TextWrapped(Tr("適用先：フリーライト / 登録 %zu 件 / お気に入り %zu / %zu"),
+                        g_library->Lights().size(), g_library->Favorites().size(), PresetLibrary::kFavoriteLimit);
+                } else {
+                    ImGuiMCP::TextWrapped(Tr("適用先 : Light %d / 登録 %zu 件 / お気に入り %zu / %zu"), g_editor.SelectedSlot() + 1,
+                        g_library->Lights().size(), g_library->Favorites().size(), PresetLibrary::kFavoriteLimit);
+                }
                 ImGuiMCP::TextWrapped(Tr("使う : 種類・色だけ適用。お気に入りはメインに表示します。削除はArchivedへの退避です。"));
                 ImGuiMCP::SetNextItemWidth(std::max(1.0F, ImGuiMCP::GetContentRegionAvail().x - ButtonWidth(Tr("検索"))));
                 ImGuiMCP::InputText(Tr("検索"), search.data(), search.size());
@@ -1211,7 +1520,7 @@ namespace ScreenshotLightingAssistant::UI
                         ActionRowLayout actions{ImGuiMCP::GetContentRegionAvail().x, ImGuiMCP::GetStyle()->ItemSpacing.x};
                         NextAction(actions, Tr("使う"));
                         if (SelectableButton(Tr("使う"))) {
-                            g_editor.ApplyLightRecipe(entry.type, entry.tint);
+                            ApplySelectedLightRecipe(RuntimeLight::GetView(), entry.type, entry.tint);
                             notice = Tr("ライトへ適用 : ") + entry.name;
                             operationError.clear();
                         }
@@ -1414,6 +1723,7 @@ namespace ScreenshotLightingAssistant::UI
             g_editor.FinishNumericEdit();
             g_registerScene = scene;
             g_registrationSnapshot = g_editor.GetScene();
+            g_registrationScreenPlacement = scene ? RuntimeLight::GetScreenPlacementPreset() : std::nullopt;
             g_registrationSlot = g_editor.SelectedSlot();
             g_saveFace = false;
             g_registrationName.fill('\0');
@@ -1516,7 +1826,9 @@ namespace ScreenshotLightingAssistant::UI
                 }
                 if (g_registerScene) {
                     ImGuiMCP::Checkbox(Tr("フェイスライトも含める"), &g_saveFace);
-                    ImGuiMCP::TextWrapped(Tr("通常3灯の位置・微調整・種類・色・強さ・範囲・影・ON/OFFを保存します。正面の基準と照明全体の開始状態は保存しません。"));
+                    ImGuiMCP::TextWrapped(g_registrationScreenPlacement ?
+                        Tr("通常3灯に加え、画面配置ライトのON/OFF・画面位置・距離・色・強さ・範囲・影を保存します。カードのカメラ印が目印です。") :
+                        Tr("通常3灯の位置・微調整・種類・色・強さ・範囲・影・ON/OFFを保存します。正面の基準と照明全体の開始状態は保存しません。"));
                 } else {
                     ImGuiMCP::Text("Light %d / %s", g_registrationSlot + 1, Tr(kLightTypes[g_registrationSnapshot[g_registrationSlot].type].name));
                     ImGuiMCP::TextWrapped(Tr("登録はライト選択の候補を増やします。灯数や現在の照明は変えません。"));
@@ -1531,7 +1843,8 @@ namespace ScreenshotLightingAssistant::UI
                             std::any_of(g_library->Scenes().begin(), g_library->Scenes().end(), [&](const auto& e) { return e.name == name; }) :
                             std::any_of(g_library->Lights().begin(), g_library->Lights().end(), [&](const auto& e) { return e.name == name; }));
                     }
-                    const bool saved = g_registerScene ? g_library->SaveScene(name, g_registrationSnapshot, g_saveFace) :
+                    const bool saved = g_registerScene ? g_library->SaveScene(name, g_registrationSnapshot,
+                        g_saveFace, g_registrationScreenPlacement) :
                         g_library->SaveLight(name, g_registrationSnapshot[g_registrationSlot]);
                     if (saved) {
                         g_libraryNotice = Tr("登録しました : ") + name;
@@ -1621,11 +1934,152 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::PopStyleColor();
         }
 
-        void DrawPrototypeControls(bool& anySliderActive)
+        void DrawScreenPlacementMainSettings(bool& anyActive, const RuntimeLight::View& runtime)
         {
-            DrawPlacementAndLightSelection(anySliderActive);
+            auto light = runtime.screenPlacement.light;
+            bool changed{};
+            const char* heading = Tr("3. 基本設定 / 編集中：フリーライト（仮）");
+            const float width = ImGuiMCP::GetContentRegionAvail().x;
+            const float gap = ImGuiMCP::GetStyle()->ItemSpacing.x + ImGuiMCP::GetFontSize() * .5F;
+            if (FitsInline(width, ImGuiMCP::CalcTextSize(heading).x, ButtonWidth(Tr("初期値")), gap)) {
+                ImGuiMCP::TextUnformatted(heading);
+                ImGuiMCP::SameLine(0, gap);
+            } else {
+                ImGuiMCP::TextWrapped("%s", heading);
+            }
+            if (SelectableButton(Tr("初期値"))) {
+                light.intensity = kLightIntensityDefault;
+                light.range = kLightRangeDefault;
+                light.distance = kScreenPlacementDepthDefault;
+                light.shadowBias = kShadowBiasDefault;
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip(Tr("フリーライトの強さ・範囲・距離・影の補正を初期値へ戻します。位置・種類・色・影の方式・ON/OFFは保持します。"));
+            }
+            if (!runtime.screenPlacement.enabled) {
+                ImGuiMCP::TextWrapped(Tr("OFF：設定と画面位置は保持されています。消灯中も編集できます。"));
+            } else if (runtime.session.running && runtime.screenPlacement.waiting) {
+                ImGuiMCP::TextWrapped(Tr("待機：点灯中の通常ライトを2灯以下にしてください。"));
+            }
+
+            const float labelWidth = std::max({ImGuiMCP::CalcTextSize(Tr("強さ")).x,
+                ImGuiMCP::CalcTextSize(Tr("光の範囲")).x, ImGuiMCP::CalcTextSize(Tr("対象からの距離")).x});
+            ImGuiMCP::PushItemWidth(std::max(1.0F, ImGuiMCP::GetContentRegionAvail().x - labelWidth -
+                ImGuiMCP::GetStyle()->ItemSpacing.x));
+            changed = ImGuiMCP::SliderFloat("##free_light_intensity", &light.intensity,
+                0.0F, 3.0F, "%.2f") || changed;
+            ImGuiMCP::SameLine();
+            ImGuiMCP::TextUnformatted(Tr("強さ"));
+            anyActive = ImGuiMCP::IsItemActive() || anyActive;
+            changed = ImGuiMCP::SliderFloat("##free_light_range", &light.range,
+                kScreenPlacementRangeMin, kScreenPlacementRangeMax, "%.2f m") || changed;
+            ImGuiMCP::SameLine();
+            ImGuiMCP::TextUnformatted(Tr("光の範囲"));
+            anyActive = ImGuiMCP::IsItemActive() || anyActive;
+            changed = ImGuiMCP::SliderFloat("##free_light_distance", &light.distance,
+                kScreenPlacementDepthMin, kScreenPlacementDepthMax, "%.2f m") || changed;
+            ImGuiMCP::SameLine();
+            ImGuiMCP::TextUnformatted(Tr("対象からの距離"));
+            anyActive = ImGuiMCP::IsItemActive() || anyActive;
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip(Tr("対象からカメラ側へ置く距離です。画面上の横・縦位置は変えません。"));
+            }
+            ImGuiMCP::PopItemWidth();
+
+            const std::array<const char*, 3> shadowLabels{Tr("影なし"), Tr("全方向の影"), Tr("スポットの影")};
+            for (int mode = 0; mode < 3; ++mode) {
+                if (mode > 0) { ImGuiMCP::SameLine(); }
+                const bool selected = mode == 0 ? !light.castsShadow :
+                    light.castsShadow && light.shadowProjection ==
+                        (mode == 1 ? ShadowProjection::Omni : ShadowProjection::Spot);
+                ImGuiMCP::PushID(mode);
+                if (SelectableButton(shadowLabels[mode], selected)) {
+                    light.castsShadow = mode != 0;
+                    if (mode != 0) {
+                        light.shadowProjection = mode == 1 ? ShadowProjection::Omni : ShadowProjection::Spot;
+                    }
+                    changed = true;
+                }
+                ImGuiMCP::PopID();
+            }
+            if (light.castsShadow && light.shadowProjection == ShadowProjection::Spot) {
+                ImGuiMCP::TextUnformatted(Tr("影の補正"));
+                ImGuiMCP::SameLine();
+                for (std::size_t index = 0; index < kShadowBiasLevels.size(); ++index) {
+                    if (index > 0) { ImGuiMCP::SameLine(); }
+                    const float value = kShadowBiasLevels[index];
+                    const auto label = value == 1.0F ? std::string(Tr("1 (標準)")) : Fmt("{:g}", value);
+                    ImGuiMCP::PushID(static_cast<int>(index));
+                    if (SelectableButton(label.c_str(), light.shadowBias == value)) {
+                        light.shadowBias = value;
+                        changed = true;
+                    }
+                    ImGuiMCP::PopID();
+                }
+            }
+
+            const auto tint = RuntimeTint(light).value_or(LightTint{1, 1, 1});
+            const float swatchSize = ImGuiMCP::GetFrameHeight();
+            if (ImGuiMCP::ColorButton("##free_light_color",
+                    {tint.red, tint.green, tint.blue, 1.0F},
+                    ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {swatchSize, swatchSize})) {
+                ImGuiMCP::OpenPopup("free_light_color_popup");
+            }
+            ImGuiMCP::SameLine();
+            ImGuiMCP::AlignTextToFramePadding();
+            ImGuiMCP::TextUnformatted(Tr("ライトの色"));
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_PopupBg, Color(12, 18, 27));
+            if (ImGuiMCP::BeginPopup("free_light_color_popup")) {
+                constexpr std::array<LightTint, 8> palette{{
+                    {1,1,1}, {1,0.8F,0.53F}, {1,0.6F,0.29F}, {0.3F,0.55F,1},
+                    {1,0.25F,0.2F}, {0.35F,1,0.45F}, {0.3F,1,1}, {0.85F,0.4F,1}
+                }};
+                const float paletteSize = ImGuiMCP::GetFontSize() * 1.25F;
+                for (int index = 0; index < static_cast<int>(palette.size()); ++index) {
+                    ImGuiMCP::PushID(index);
+                    const auto& color = palette[index];
+                    if (ImGuiMCP::ColorButton("##free_swatch",
+                            {color.red, color.green, color.blue, 1.0F},
+                            ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {paletteSize, paletteSize})) {
+                        light.customTint = color;
+                        changed = true;
+                    }
+                    ImGuiMCP::PopID();
+                    if (index != 3 && index != 7) { ImGuiMCP::SameLine(); }
+                }
+                const auto current = RuntimeTint(light).value_or(LightTint{1, 1, 1});
+                float rgb[]{current.red, current.green, current.blue};
+                ImGuiMCP::SetNextItemWidth(std::min(ImGuiMCP::GetFontSize() * 13.0F,
+                    ImGuiMCP::GetMainViewport()->WorkSize.x * .8F));
+                if (ImGuiMCP::ColorPicker3("##free_light_picker", rgb,
+                        ImGuiMCP::ImGuiColorEditFlags_DisplayRGB |
+                        ImGuiMCP::ImGuiColorEditFlags_Uint8 |
+                        ImGuiMCP::ImGuiColorEditFlags_PickerHueBar |
+                        ImGuiMCP::ImGuiColorEditFlags_NoSidePreview |
+                        ImGuiMCP::ImGuiColorEditFlags_NoAlpha)) {
+                    light.customTint = LightTint{rgb[0], rgb[1], rgb[2]};
+                    changed = true;
+                }
+                anyActive = ImGuiMCP::IsAnyItemActive() || anyActive;
+                if (SelectableButton(Tr("種類の元の色に戻す"))) {
+                    light.customTint.reset();
+                    changed = true;
+                }
+                ImGuiMCP::EndPopup();
+            }
+            ImGuiMCP::PopStyleColor();
+            if (changed) { RuntimeLight::SetScreenPlacementSettings(light); }
+        }
+
+        void DrawPrototypeControls(bool& anySliderActive, const RuntimeLight::View& runtime)
+        {
+            DrawPlacementAndLightSelection(anySliderActive, runtime);
 
             ImGuiMCP::Separator();
+            if (g_editScreenPlacement && runtime.screenPlacement.settingsRemembered) {
+                DrawScreenPlacementMainSettings(anySliderActive, runtime);
+            } else {
             std::array<char, 128> settingsHeading{};
             std::snprintf(settingsHeading.data(), settingsHeading.size(),
                 Tr("3. 基本設定 / 編集中 : Light %d"), g_editor.SelectedSlot() + 1);
@@ -1687,6 +2141,7 @@ namespace ScreenshotLightingAssistant::UI
             }
             DrawColorAndRegistration(anySliderActive);
             ImGuiMCP::EndDisabled();
+            }
 
             ImGuiMCP::Separator();
             const float presetRowWidth = ImGuiMCP::GetContentRegionAvail().x;
@@ -1706,7 +2161,7 @@ namespace ScreenshotLightingAssistant::UI
             if (!g_libraryNotice.empty()) { ImGuiMCP::TextWrapped("%s", g_libraryNotice.c_str()); }
             if (!g_libraryLoadError.empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_libraryLoadError).c_str()); }
             if (g_library && !g_library->ViewError().empty()) { ImGuiMCP::TextWrapped("%s", StoredError(g_library->ViewError()).c_str()); }
-            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.3.0"));
+            ImGuiMCP::TextDisabled(Tr("登録の保存先 (?) / 0.4.0"));
             if (ImGuiMCP::IsItemHovered() && g_library) {
                 const auto utf8 = g_library->Directory().u8string();
                 Tooltip(Tr("%s\nstorage-v2.slaがある場合は、そのファイルを提供する保存用MODへ新規ファイルも保存します。\nマーカーがない場合はMO2の通常出力先を使います。\n登録は再起動後も残り、ゲームのセーブとは独立です。\n登録から外したファイルは、この中のArchivedへ退避します。\n履歴・栞の登録は起動中のみの一時退避です。"), reinterpret_cast<const char*>(utf8.c_str()));
@@ -1880,6 +2335,52 @@ namespace ScreenshotLightingAssistant::UI
             }
         }
 
+        void DrawToolHotkeyWindow(const RuntimeLight::View& runtime)
+        {
+            if (!g_toolHotkeyWindowOpen) { return; }
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            const ImVec2 maximum{viewport->WorkSize.x * .9F, viewport->WorkSize.y * .9F};
+            ImGuiMCP::SetNextWindowSize({std::min(390.0F, maximum.x), 0}, ImGuiMCP::ImGuiCond_FirstUseEver);
+            ImGuiMCP::SetNextWindowSizeConstraints({std::min(290.0F, maximum.x), 0}, maximum);
+            if (g_focusToolHotkeyWindow) {
+                ImGuiMCP::SetNextWindowFocus();
+                g_focusToolHotkeyWindow = false;
+            }
+            bool open = true;
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_WindowBg, Color(12, 18, 27));
+            const bool visible = ImGuiMCP::Begin(Tr("ツール表示キー###sla_tool_window_hotkey"), &open,
+                ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize | ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            if (visible) {
+                ImGuiMCP::Text(Tr("現在：%s"), Tr(runtime.toolWindowHotkeyName.c_str()));
+                ImGuiMCP::TextWrapped(Tr("このキーでLighting単独ウィンドウを開閉します。Shift / Ctrl / Altを押しながら登録できます。"));
+                if (runtime.toolWindowHotkeyCapture) {
+                    ImGuiMCP::TextWrapped(Tr("登録するキーを押してください。修飾キーは押したままにします。Escでキャンセルします。"));
+                    if (SelectableButton(Tr("キャンセル##tool_window_hotkey"))) {
+                        RuntimeLight::CancelToolWindowHotkeyCapture();
+                    }
+                } else {
+                    if (SelectableButton(Tr("変更##tool_window_hotkey"))) {
+                        RuntimeLight::BeginToolWindowHotkeyCapture();
+                    }
+                    ImGuiMCP::SameLine();
+                    ImGuiMCP::BeginDisabled(runtime.toolWindowHotkey.key == kNoToolWindowHotkey);
+                    if (SelectableButton(Tr("解除##tool_window_hotkey"))) {
+                        RuntimeLight::ClearToolWindowHotkey();
+                    }
+                    ImGuiMCP::EndDisabled();
+                }
+                if (!runtime.toolWindowHotkeyError.empty()) {
+                    ImGuiMCP::TextWrapped("%s", Tr(runtime.toolWindowHotkeyError.c_str()));
+                }
+            }
+            ImGuiMCP::End();
+            ImGuiMCP::PopStyleColor();
+            if (!open) {
+                g_toolHotkeyWindowOpen = false;
+                RuntimeLight::CancelToolWindowHotkeyCapture();
+            }
+        }
+
         void DrawPhotoEffectWindow(const RuntimeLight::View& runtime)
         {
             if (!g_photoEffectWindowOpen) { return; }
@@ -2030,7 +2531,7 @@ namespace ScreenshotLightingAssistant::UI
                     "白～淡い金色の光の粒が粒ごとに異なる周期でまたたきながら、対象の周囲へ現れます。動きはプリセットまたは詳細調整で設定できます。撮影ライトの開始中だけ表示し、停止・ロード・場所移動で撤去します。ゲームのセーブデータには保存しません。";
                 ImGuiMCP::TextWrapped(Tr(effectDescription));
                 ImGuiMCP::TextWrapped(Tr("粒の大きさ・広がる範囲・不透明度・明るさは別々に調整できます。"));
-                ImGuiMCP::TextWrapped(Tr("0.3.0 撮影エフェクト：初期状態はOFFです。"));
+                ImGuiMCP::TextWrapped(Tr("0.4.0 撮影エフェクト：初期状態はOFFです。"));
             }
             ImGuiMCP::End();
             ImGuiMCP::PopStyleColor();
@@ -2465,11 +2966,331 @@ namespace ScreenshotLightingAssistant::UI
             if (!open) { g_screenOverlayWindowOpen = false; }
         }
 
+        void __stdcall DrawScreenPlacementHud()
+        {
+            const auto runtime = RuntimeLight::GetView();
+            if (const auto* viewport = ImGuiMCP::GetMainViewport(); viewport) {
+                RuntimeLight::SyncScreenPlacementViewport(viewport->Size.x, viewport->Size.y);
+            }
+            if (!runtime.screenPlacement.positioning) {
+                g_screenPlacementPanelVisible = false;
+                g_screenPlacementColorPopupVisible = false;
+                return;
+            }
+            auto* viewport = ImGuiMCP::GetMainViewport();
+            if (!viewport || viewport->Size.x < 2.0F || viewport->Size.y < 2.0F) { return; }
+            auto* draw = ImGuiMCP::GetForegroundDrawList(viewport);
+            if (!draw) { return; }
+            const auto mouse = ImGuiMCP::GetMousePos();
+            const ImVec2 marker{
+                std::clamp(mouse.x, viewport->Pos.x, viewport->Pos.x + viewport->Size.x - 1.0F),
+                std::clamp(mouse.y, viewport->Pos.y, viewport->Pos.y + viewport->Size.y - 1.0F)};
+            const bool overPanel = g_screenPlacementPanelVisible &&
+                mouse.x >= g_screenPlacementPanelMin.x && mouse.x <= g_screenPlacementPanelMax.x &&
+                mouse.y >= g_screenPlacementPanelMin.y && mouse.y <= g_screenPlacementPanelMax.y;
+            const bool colorPickerOpen = g_screenPlacementColorPopupVisible;
+            const bool overControls = overPanel || colorPickerOpen;
+            ImGuiMCP::SetMouseCursor(overControls ? ImGuiMCP::ImGuiMouseCursor_Arrow :
+                ImGuiMCP::ImGuiMouseCursor_None);
+            constexpr float radius = 16.0F;
+            const auto amber = Color(255, 196, 82, 255);
+            const auto outline = Color(15, 18, 24, 220);
+            if (!overControls) {
+                ImGuiMCP::ImDrawListManager::AddCircleFilled(draw, marker, radius + 3.0F,
+                    Color(15, 18, 24, 205), 40);
+                ImGuiMCP::ImDrawListManager::AddCircleFilled(draw, marker, radius - 3.0F,
+                    Color(255, 196, 82, 70), 40);
+                ImGuiMCP::ImDrawListManager::AddCircle(draw, marker, radius, amber, 40, 3.0F);
+                for (int index = 0; index < 8; ++index) {
+                    const float angle = index * std::numbers::pi_v<float> * .25F;
+                    const ImVec2 a{marker.x + std::cos(angle) * (radius + 4.0F),
+                        marker.y + std::sin(angle) * (radius + 4.0F)};
+                    const ImVec2 b{marker.x + std::cos(angle) * (radius + 10.0F),
+                        marker.y + std::sin(angle) * (radius + 10.0F)};
+                    ImGuiMCP::ImDrawListManager::AddLine(draw, a, b, amber, 2.0F);
+                }
+            }
+
+            const auto message = std::format("{} / {}: {:.2f} m",
+                Tr("画面配置ライト：小窓外で移動 / ホイールで距離（Shiftで高速） / 左クリックで配置 / 右クリックでキャンセル"),
+                Tr("対象からの距離"), runtime.screenPlacement.light.distance);
+            const auto textSize = ImGuiMCP::CalcTextSize(message.c_str());
+            const ImVec2 textTop{viewport->Pos.x + (viewport->Size.x - textSize.x) * .5F,
+                viewport->Pos.y + ImGuiMCP::GetFontSize() * 1.5F};
+            ImGuiMCP::ImDrawListManager::AddRectFilled(draw,
+                {textTop.x - 10.0F, textTop.y - 6.0F},
+                {textTop.x + textSize.x + 10.0F, textTop.y + textSize.y + 6.0F},
+                Color(8, 12, 18, 210), 4.0F, 0);
+            ImGuiMCP::ImDrawListManager::AddText(draw, ImGuiMCP::GetFont(), ImGuiMCP::GetFontSize(),
+                textTop, Color(244, 247, 250), message.c_str());
+        }
+
+        bool DrawScreenPlacementControls(const RuntimeLight::View& runtime)
+        {
+            if (!runtime.screenPlacement.positioning) { return false; }
+            auto* viewport = ImGuiMCP::GetMainViewport();
+            if (!viewport) { return false; }
+
+            auto light = runtime.screenPlacement.light;
+            const float width = std::clamp(ImGuiMCP::GetFontSize() * 14.0F, 230.0F,
+                std::min(310.0F, viewport->WorkSize.x * .34F));
+            ImGuiMCP::SetNextWindowPos(
+                {viewport->WorkPos.x + viewport->WorkSize.x - width - ImGuiMCP::GetFontSize() * 1.5F,
+                 viewport->WorkPos.y + ImGuiMCP::GetFontSize() * 4.0F},
+                ImGuiMCP::ImGuiCond_FirstUseEver);
+            ImGuiMCP::SetNextWindowSizeConstraints(
+                {width, 0.0F}, {width, viewport->WorkSize.y * .72F});
+
+            constexpr auto popupId = "screen_placement_color_picker";
+            const bool popupWasOpen = ImGuiMCP::IsPopupOpen(popupId);
+            bool changed = false;
+            bool panelHovered = false;
+            bool popupHovered = false;
+            ImVec2 panelMin{};
+            ImVec2 panelMax{};
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_WindowBg, Color(12, 18, 27, 235));
+            const bool visible = ImGuiMCP::Begin(
+                Tr("画面配置ライト###sla_screen_placement_controls"), nullptr,
+                ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize | ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            panelMin = ImGuiMCP::GetWindowPos();
+            const auto panelSize = ImGuiMCP::GetWindowSize();
+            panelMax = {panelMin.x + panelSize.x, panelMin.y + panelSize.y};
+            panelHovered = ImGuiMCP::IsWindowHovered(
+                ImGuiMCP::ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            if (visible) {
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextUnformatted(Tr("強さ"));
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(-1.0F);
+                changed = ImGuiMCP::SliderFloat("##screen_placement_intensity", &light.intensity,
+                    0.0F, 3.0F, "%.2f") || changed;
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextUnformatted(Tr("範囲"));
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(-1.0F);
+                changed = ImGuiMCP::SliderFloat("##screen_placement_range", &light.range,
+                    kScreenPlacementRangeMin, kScreenPlacementRangeMax, "%.2f m") || changed;
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextUnformatted(Tr("距離"));
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(-1.0F);
+                changed = ImGuiMCP::SliderFloat("##screen_placement_distance", &light.distance,
+                    kScreenPlacementDepthMin, kScreenPlacementDepthMax, "%.2f m") || changed;
+                if (ImGuiMCP::IsItemHovered()) {
+                    Tooltip(Tr("対象からカメラ側へ置く距離です。カメラを越えないよう、実際の配置は現在のカメラ位置の手前で安全に制限されます。"));
+                }
+
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextUnformatted(Tr("影"));
+                ImGuiMCP::SameLine();
+                constexpr std::array<const char*, 3> shadowLabels{"無", "全方向", "スポット"};
+                for (int mode = 0; mode < static_cast<int>(shadowLabels.size()); ++mode) {
+                    if (mode > 0) { ImGuiMCP::SameLine(); }
+                    const bool selected = mode == 0 ? !light.castsShadow :
+                        light.castsShadow && light.shadowProjection ==
+                            (mode == 1 ? ShadowProjection::Omni : ShadowProjection::Spot);
+                    ImGuiMCP::PushID(mode);
+                    if (SelectableButton(Tr(shadowLabels[mode]), selected)) {
+                        light.castsShadow = mode != 0;
+                        if (mode != 0) {
+                            light.shadowProjection = mode == 1 ? ShadowProjection::Omni : ShadowProjection::Spot;
+                        }
+                        changed = true;
+                    }
+                    ImGuiMCP::PopID();
+                }
+
+                const auto tint = RuntimeTint(light).value_or(LightTint{1.0F, 1.0F, 1.0F});
+                const float swatchSize = ImGuiMCP::GetFrameHeight();
+                if (ImGuiMCP::ColorButton("##screen_placement_color",
+                        {tint.red, tint.green, tint.blue, 1.0F},
+                        ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {swatchSize, swatchSize})) {
+                    ImGuiMCP::OpenPopup(popupId);
+                }
+                ImGuiMCP::SameLine();
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextUnformatted(Tr("色"));
+
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_PopupBg, Color(12, 18, 27));
+                if (ImGuiMCP::BeginPopup(popupId)) {
+                    popupHovered = ImGuiMCP::IsWindowHovered(
+                        ImGuiMCP::ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+                    constexpr std::array<LightTint, 8> palette{{
+                        {1,1,1}, {1,0.8F,0.53F}, {1,0.6F,0.29F}, {0.3F,0.55F,1},
+                        {1,0.25F,0.2F}, {0.35F,1,0.45F}, {0.3F,1,1}, {0.85F,0.4F,1}
+                    }};
+                    const float paletteSize = ImGuiMCP::GetFontSize() * 1.25F;
+                    for (int index = 0; index < static_cast<int>(palette.size()); ++index) {
+                        ImGuiMCP::PushID(index);
+                        const auto& color = palette[index];
+                        if (ImGuiMCP::ColorButton("##swatch",
+                                {color.red, color.green, color.blue, 1.0F},
+                                ImGuiMCP::ImGuiColorEditFlags_NoTooltip, {paletteSize, paletteSize})) {
+                            light.customTint = color;
+                            changed = true;
+                        }
+                        ImGuiMCP::PopID();
+                        if (index != 3 && index != 7) { ImGuiMCP::SameLine(); }
+                    }
+                    const auto current = RuntimeTint(light).value_or(LightTint{1.0F, 1.0F, 1.0F});
+                    float rgb[]{current.red, current.green, current.blue};
+                    ImGuiMCP::SetNextItemWidth(std::min(ImGuiMCP::GetFontSize() * 13.0F,
+                        viewport->WorkSize.x * .8F));
+                    if (ImGuiMCP::ColorPicker3("##screen_placement_picker", rgb,
+                            ImGuiMCP::ImGuiColorEditFlags_DisplayRGB |
+                            ImGuiMCP::ImGuiColorEditFlags_Uint8 |
+                            ImGuiMCP::ImGuiColorEditFlags_PickerHueBar |
+                            ImGuiMCP::ImGuiColorEditFlags_NoSidePreview |
+                            ImGuiMCP::ImGuiColorEditFlags_NoAlpha)) {
+                        light.customTint = LightTint{rgb[0], rgb[1], rgb[2]};
+                        changed = true;
+                    }
+                    if (SelectableButton(Tr("種類の元の色に戻す"))) {
+                        light.customTint.reset();
+                        changed = true;
+                    }
+                    ImGuiMCP::EndPopup();
+                }
+                ImGuiMCP::PopStyleColor();
+            }
+            g_screenPlacementColorPopupVisible = ImGuiMCP::IsPopupOpen(popupId);
+            ImGuiMCP::End();
+            ImGuiMCP::PopStyleColor();
+
+            g_screenPlacementPanelVisible = true;
+            g_screenPlacementPanelMin = panelMin;
+            g_screenPlacementPanelMax = panelMax;
+
+            if (changed) { RuntimeLight::SetScreenPlacementSettings(light); }
+
+            const auto mouse = ImGuiMCP::GetMousePos();
+            const bool insidePanel = panelHovered || (mouse.x >= panelMin.x && mouse.x <= panelMax.x &&
+                mouse.y >= panelMin.y && mouse.y <= panelMax.y);
+            if (insidePanel || popupHovered || popupWasOpen || ImGuiMCP::IsPopupOpen(popupId)) {
+                ImGuiMCP::SetMouseCursor(ImGuiMCP::ImGuiMouseCursor_Arrow);
+            }
+            static bool panelMouseCapture = false;
+            if (insidePanel && ImGuiMCP::IsMouseClicked(ImGuiMCP::ImGuiMouseButton_Left)) {
+                panelMouseCapture = true;
+            }
+            const bool capture = insidePanel || panelMouseCapture || popupHovered || popupWasOpen ||
+                ImGuiMCP::IsPopupOpen(popupId) ||
+                ImGuiMCP::IsAnyItemActive();
+            if (!ImGuiMCP::IsMouseDown(ImGuiMCP::ImGuiMouseButton_Left)) {
+                panelMouseCapture = false;
+            }
+            return capture;
+        }
+
+        void UpdateScreenPlacementInteraction(bool controlsCaptureMouse)
+        {
+            const auto runtime = RuntimeLight::GetView();
+            if (!runtime.screenPlacement.positioning) {
+                RestoreScreenPlacementMenu();
+                return;
+            }
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            if (!viewport || viewport->Size.x < 2.0F || viewport->Size.y < 2.0F) { return; }
+            const auto mouse = ImGuiMCP::GetMousePos();
+            if (g_skipScreenPlacementClick) {
+                g_skipScreenPlacementClick = false;
+                return;
+            }
+            if (controlsCaptureMouse) { return; }
+            RuntimeLight::UpdateScreenPlacement(mouse.x - viewport->Pos.x,
+                mouse.y - viewport->Pos.y, viewport->Size.x, viewport->Size.y);
+            if (const auto* io = ImGuiMCP::GetIO(); io && io->MouseWheel != 0.0F) {
+                RuntimeLight::AdjustScreenPlacementDistance(io->MouseWheel, io->KeyShift);
+            }
+            if (ImGuiMCP::IsMouseClicked(ImGuiMCP::ImGuiMouseButton_Left)) {
+                RuntimeLight::ConfirmScreenPlacement();
+                RestoreScreenPlacementMenu();
+            } else if (ImGuiMCP::IsMouseClicked(ImGuiMCP::ImGuiMouseButton_Right)) {
+                RuntimeLight::DisableScreenPlacement();
+                RestoreScreenPlacementMenu();
+            }
+        }
+
+        void __stdcall RenderScreenPlacementWindow()
+        {
+            const auto runtime = RuntimeLight::GetView();
+            UpdateScreenPlacementInteraction(DrawScreenPlacementControls(runtime));
+        }
+
+        void __stdcall RenderToolWindow()
+        {
+            const auto* viewport = ImGuiMCP::GetMainViewport();
+            if (viewport) {
+                const float margin = ImGuiMCP::GetFontSize() * 2.0F;
+                const float maximumWidth = std::max(1.0F, viewport->WorkSize.x - margin);
+                const float maximumHeight = std::max(1.0F, viewport->WorkSize.y - margin);
+                ImGuiMCP::SetNextWindowSize({
+                    std::min(ImGuiMCP::GetFontSize() * 31.0F, maximumWidth),
+                    std::min(ImGuiMCP::GetFontSize() * 48.0F, maximumHeight)
+                }, ImGuiMCP::ImGuiCond_FirstUseEver);
+            }
+
+            bool open = true;
+            const bool visible = ImGuiMCP::Begin(
+                "Screenshot Lighting Assistant###sla_tool_window",
+                &open, ImGuiMCP::ImGuiWindowFlags_NoCollapse);
+            if (visible) { Render(); }
+            ImGuiMCP::End();
+
+            if (!open && g_toolWindow) { g_toolWindow->IsOpen = false; }
+        }
+
+        void __stdcall ProcessToolWindowToggle()
+        {
+            if (!g_toolWindow) { return; }
+            RuntimeLight::PollPhotoModeToolWindowHotkey();
+            const bool currentlyOpen = g_toolWindow->IsOpen.load();
+            if (g_toolWindowWasOpen && !currentlyOpen) {
+                g_toolHotkeyWindowOpen = false;
+                RuntimeLight::CancelToolWindowHotkeyCapture();
+            }
+            g_toolWindowWasOpen = currentlyOpen;
+            if (!RuntimeLight::ConsumeToolWindowToggleRequest()) { return; }
+
+            const bool opening = !g_toolWindow->IsOpen.load();
+            if (!opening) {
+                g_toolWindow->IsOpen = false;
+                g_toolWindowWasOpen = false;
+                g_toolHotkeyWindowOpen = false;
+                RuntimeLight::CancelToolWindowHotkeyCapture();
+                return;
+            }
+
+            if (g_screenPlacementWindow && g_screenPlacementWindow->IsOpen.load()) {
+                RuntimeLight::DisableScreenPlacement();
+                g_screenPlacementWindow->IsOpen = false;
+                g_returnToMainAfterScreenPlacement = false;
+                g_returnToToolWindowAfterScreenPlacement = false;
+            }
+            if (g_mainWindow) { g_mainWindow->IsOpen = false; }
+            if (g_presetPicker.IsOpen()) { g_presetPicker.Close(); }
+            g_openPresetRequested = false;
+            g_openLightLibraryRequested = false;
+            g_openRegistrationRequested = false;
+            g_positionWindowOpen = false;
+            g_persistentFaceWindowOpen = false;
+            g_photoEffectWindowOpen = false;
+            g_screenOverlayWindowOpen = false;
+            g_toolHotkeyWindowOpen = false;
+            RuntimeLight::CancelPersistentHotkeyCapture();
+            RuntimeLight::CancelToolWindowHotkeyCapture();
+            g_toolWindow->IsOpen = true;
+            g_toolWindowWasOpen = true;
+        }
+
         void __stdcall Render()
         {
             // The token comes from before this UI frame. A load/stop invalidates it,
             // so a delayed frame cannot resurrect a light from the previous session.
             const auto runtime = RuntimeLight::GetView();
+            if (g_editScreenPlacement && !runtime.screenPlacement.settingsRemembered) {
+                g_editScreenPlacement = false;
+            }
             const float topWidth = ImGuiMCP::GetContentRegionAvail().x;
             const char* powerLabel = runtime.session.running ? Tr("撮影ライトを停止") : Tr("撮影ライトを開始");
             ImGuiMCP::BeginDisabled(!runtime.session.ready || runtime.session.blocked);
@@ -2535,6 +3356,16 @@ namespace ScreenshotLightingAssistant::UI
                 g_libraryNotice.clear();
             }
             if (ImGuiMCP::IsItemHovered()) { Tooltip("%s", Tr("日本語／英語を切り替えます。名前・照明・登録データは変えません。")); }
+            if (ImGuiMCP::GetContentRegionAvail().x >= ButtonWidth("K")) { ImGuiMCP::SameLine(); }
+            if (SelectableButton("K", g_toolHotkeyWindowOpen)) {
+                g_editor.FinishNumericEdit();
+                g_toolHotkeyWindowOpen = !g_toolHotkeyWindowOpen;
+                g_focusToolHotkeyWindow = g_toolHotkeyWindowOpen;
+                if (!g_toolHotkeyWindowOpen) { RuntimeLight::CancelToolWindowHotkeyCapture(); }
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                Tooltip("%s", Tr("Lighting単独ウィンドウを開閉するキーを設定します。Shift / Ctrl / Altとの組み合わせも登録できます。"));
+            }
             if (!g_languageError.empty()) { ImGuiMCP::TextWrapped("%s", Tr(g_languageError.c_str())); }
             if (runtime.statusImportant) { ImGuiMCP::TextWrapped("%s", runtime.status.c_str()); }
             DrawTargetPicker(runtime);
@@ -2551,9 +3382,10 @@ namespace ScreenshotLightingAssistant::UI
             ImGuiMCP::PopID();
             ImGuiMCP::Separator();
             bool anyActive = false;
-            DrawPrototypeControls(anyActive);
+            DrawPrototypeControls(anyActive, runtime);
             DrawPositionWindow(anyActive);
             DrawPersistentFaceWindow(runtime);
+            DrawToolHotkeyWindow(runtime);
             DrawPhotoEffectWindow(runtime);
             DrawScreenOverlayWindow();
             if (g_openPresetRequested) {
@@ -2569,6 +3401,9 @@ namespace ScreenshotLightingAssistant::UI
             // not be committed once per frame by an idle main settings pane.
             if (!anyActive) { g_editor.FinishNumericEdit(); }
             RuntimeLight::Submit(runtime.session.epoch, g_editor.GetScene());
+            if (!g_screenPlacementWindow) {
+                UpdateScreenPlacementInteraction(DrawScreenPlacementControls(RuntimeLight::GetView()));
+            }
         }
     }
 
@@ -2593,6 +3428,7 @@ namespace ScreenshotLightingAssistant::UI
         if (!storage.root.empty()) {
             g_languagePath = storage.root / "ui-language.sla";
             RuntimeLight::ConfigurePersistentStorage(storage.root / "persistent-face.sla");
+            RuntimeLight::ConfigureToolWindowHotkeyStorage(storage.root / "tool-window-hotkey.sla");
             LoadPreference(g_languagePath, g_languageError);
             g_libraryNotice = storage.notice.empty() ? std::string{} : Tr(storage.notice.c_str());
             g_library = std::make_unique<PresetLibrary>(storage.root / "Presets");
@@ -2605,6 +3441,11 @@ namespace ScreenshotLightingAssistant::UI
             g_libraryNotice = Tr("保存先が取得できないため登録を利用できません。");
         }
         g_screenOverlayHudElement = SKSEMenuFramework::AddHudElement(DrawScreenOverlayHud);
+        g_screenPlacementHudElement = SKSEMenuFramework::AddHudElement(DrawScreenPlacementHud);
+        g_mainWindow = SKSEMenuFramework::GetMainWindow();
+        g_screenPlacementWindow = SKSEMenuFramework::AddWindow(RenderScreenPlacementWindow, true);
+        g_toolWindow = SKSEMenuFramework::AddWindow(RenderToolWindow, true);
+        g_toolWindowToggleHudElement = SKSEMenuFramework::AddHudElement(ProcessToolWindowToggle);
         SKSEMenuFramework::AddSectionItem("Lighting", Render);
         g_registered = true;
         logger::info("Registered Screenshot Lighting Assistant with SKSE Menu Framework");

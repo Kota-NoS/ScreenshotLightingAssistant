@@ -13,6 +13,7 @@
 #include "PhotoEffectSettings.h"
 #include "PhotoEffectMotion.h"
 #include "ScreenOverlaySettings.h"
+#include "ToolWindowHotkeySettings.h"
 #include <regex>
 #include <set>
 
@@ -614,7 +615,7 @@ namespace
         using namespace ScreenshotLightingAssistant::UI;
         for (float width : { 240.0F, 320.0F, 440.0F, 620.0F, 900.0F }) {
             for (float font : { 20.0F, 24.0F, 32.0F, 48.0F }) {
-                for (int count = 0; count <= 3; ++count) {
+                for (int count = 0; count <= 4; ++count) {
                     const auto layout = CalculatePresetCardLayout(width, font, font * 7.0F, count);
                     Require(layout.diagramX >= 8.0F && layout.diagramX + layout.diagramSize <= width - 7.9F, "diagram stays within card width");
                     Require(layout.diagramY >= 8.0F, "diagram stays inside top padding");
@@ -635,7 +636,11 @@ namespace
                         Require(layout.labelsY >= layout.diagramY + layout.diagramSize + 15.0F, "narrow layout puts labels below camera");
                         Require(layout.titleY + layout.titleHeight + 5.9F <= layout.diagramY, "narrow layout puts diagram below name");
                     }
-                    Require(layout.height == CalculatePresetCardLayout(width, font, font * 7.0F, 3).height, "all light counts keep equal card heights");
+                    if (count <= 3) {
+                        Require(layout.height == CalculatePresetCardLayout(width, font, font * 7.0F, 3).height, "ordinary light counts keep equal card heights");
+                    } else {
+                        Require(layout.height >= CalculatePresetCardLayout(width, font, font * 7.0F, 3).height, "screen light never reduces card height");
+                    }
                 }
             }
         }
@@ -644,11 +649,23 @@ namespace
         Require(normal.height < (220.0F + 24.0F * 3.4F + 50.0F) * 0.8F, "normal card is at least 20 percent shorter than previous layout");
         const auto narrow = CalculatePresetCardLayout(320.0F, 32.0F, 224.0F, 3);
         Require(!narrow.horizontal, "narrow card uses readable vertical fallback");
+        Require(CalculatePresetCardLayout(320.0F, 32.0F, 224.0F, 4).height > narrow.height,
+            "stacked card grows for the free-light information row");
         const auto boundary = CalculatePresetCardLayout(MinimumPresetCardWidth(168.0F), 24.0F, 168.0F, 2);
         Require(boundary.horizontal && boundary.diagramSize >= 144.0F, "column threshold leaves readable diagram size");
         Require(normal.height <= 202.0F && normal.diagramSize == 168.0F, "compact diagram reduces normal card height");
         Require(normal.height <= 228.0F * .89F, "normal card is at least eleven percent shorter than 0.1.27");
         Require(!CalculatePresetCardLayout(MinimumPresetCardWidth(168.0F) - 1, 24, 168, 3).horizontal, "one pixel below threshold wraps without shrinking legend");
+
+        Scene scene{};
+        for (std::size_t slot = 0; slot < kManualLightCount; ++slot) {
+            scene[slot].placed = true;
+            scene[slot].enabled = slot != 1;
+        }
+        Require(VisiblePresetDetailRowCount(scene, true) == 3,
+            "preset details count only enabled regular lights plus an enabled free light");
+        Require(VisiblePresetDetailRowCount(scene, false) == 2,
+            "disabled free and regular lights remain diagram-only and do not add detail rows");
 
         // A font-free text measure: ASCII is one unit, a UTF-8 codepoint is two.
         const auto measure = [](const std::string& text) {
@@ -1147,6 +1164,25 @@ namespace
                     }
                 }
             }
+        }
+        {
+            auto scene = kScenePresets[1].scene;
+            auto screenLight = ScreenPlacementLightSettings(scene[0]);
+            screenLight.distance = 3.25F;
+            screenLight.range = 14.5F;
+            screenLight.customTint = LightTint{.31F, .62F, .93F};
+            ScreenPlacementSettings screen{true, .271F, .783F, screenLight};
+            SavedScene entry{"画面ライト込み", scene, true, {}, screen};
+            const auto text = PresetLibrary::Encode(entry);
+            Require(text.starts_with("SLA SCENE 4\n"),
+                "screen-placement state upgrades a scene preset to v4");
+            const auto decoded = PresetLibrary::DecodeScene(text);
+            Require(decoded && decoded->scene == scene && decoded->screenPlacement == screen,
+                "scene v4 preserves normalized screen position, distance and all light settings");
+            auto invalid = screen;
+            invalid.normalizedY = -0.01F;
+            Require(!ValidScreenPlacementSettings(invalid),
+                "invalid normalized preset coordinates fail validation");
         }
         verify({ 0, 0, 0 }, { 0, 0, 20 });
         verify({ 0, 0, 0 }, { 0, 0, -20 });
@@ -2718,7 +2754,7 @@ namespace
         const auto explicitCamera = PresetLibrary::DecodeScene(version2 + "0\n");
         Require(explicitCamera && explicitCamera->scene == camera, "explicit v2 camera is accepted");
         Require(!PresetLibrary::DecodeScene(version2 + "1.5\n"), "fractional mode is rejected");
-        auto unknown = legacy; unknown.replace(0, 11, "SLA SCENE 4");
+        auto unknown = legacy; unknown.replace(0, 11, "SLA SCENE 5");
         Require(!PresetLibrary::DecodeScene(unknown), "unknown scene version rejected");
 
         auto colored = headScene;
@@ -2836,6 +2872,79 @@ namespace
         editor.SetNumeric(NumericField::Intensity, 2.0F);
         editor.FinishNumericEdit();
         Require(editor.CurrentLight() == empty, "unplaced lights cannot be adjusted by disabled controls");
+    }
+
+    void ToolWindowHotkeyPreferences()
+    {
+        ToolWindowHotkeySettings settings;
+        Require(ValidToolWindowHotkeySettings(settings) && settings.key == kNoToolWindowHotkey &&
+            settings.modifiers == 0, "tool-window hotkey defaults are valid and unassigned");
+
+        settings.key = 0x26;
+        settings.modifiers = kToolWindowModifierShift | kToolWindowModifierControl;
+        const auto encoded = EncodeToolWindowHotkeySettings(settings);
+        ToolWindowHotkeySettings decoded;
+        Require(encoded == "SLA TOOL WINDOW HOTKEY 1\nkey 38\nmodifiers 3\n" &&
+            DecodeToolWindowHotkeySettings(encoded, decoded) && decoded == settings,
+            "tool-window hotkey and modifier combination round-trip exactly");
+        Require(!DecodeToolWindowHotkeySettings(encoded + "unknown 1\n", decoded) &&
+            !DecodeToolWindowHotkeySettings(encoded + "key 38\n", decoded),
+            "tool-window hotkey rejects unknown and duplicate fields");
+        Require(!ValidToolWindowHotkeySettings({0, kToolWindowModifierShift}) &&
+            !ValidToolWindowHotkeySettings({0x2A, 0}) &&
+            !ValidToolWindowHotkeySettings({0x26, 0x80}),
+            "unassigned modifiers, modifier-only keys and unknown modifier bits are rejected");
+
+        ToolWindowModifierState modifiers;
+        Require(modifiers.Update(0x2A, true) && modifiers.Mask() == kToolWindowModifierShift,
+            "left Shift enters tool-window modifier state");
+        Require(modifiers.Update(0x36, true) && modifiers.Update(0x2A, false) &&
+            modifiers.Mask() == kToolWindowModifierShift,
+            "right Shift keeps Shift active after left Shift releases");
+        Require(modifiers.Update(0x1D, true) &&
+            modifiers.Mask() == (kToolWindowModifierShift | kToolWindowModifierControl),
+            "combined Shift and Control state is tracked");
+        Require(ToolWindowHotkeyMatches(settings, 0x26, modifiers.Mask(), true) &&
+            !ToolWindowHotkeyMatches(settings, 0x26, kToolWindowModifierShift, true) &&
+            !ToolWindowHotkeyMatches(settings, 0x26, modifiers.Mask(), false),
+            "tool-window hotkey requires exact modifiers and initial key-down");
+        modifiers.Reset();
+        Require(modifiers.Mask() == 0 && !modifiers.Update(0x26, true),
+            "modifier state resets and ignores ordinary keys");
+        Require(ToolWindowVirtualKeyFromScanCode(0x1E) == 0x41 &&
+            ToolWindowVirtualKeyFromScanCode(0x3B) == 0x70 &&
+            ToolWindowVirtualKeyFromScanCode(0x9D) == 0xA3,
+            "Photo Mode fallback maps letter, function and extended scan codes to Win32 keys");
+        Require(ToolWindowVirtualKeyFromScanCode(0xC5) == 0x13 &&
+            ToolWindowVirtualKeyFromScanCode(kMaximumKeyboardScanCode + 1) == 0,
+            "Photo Mode fallback handles Pause and rejects out-of-range scan codes");
+
+        const auto root = std::filesystem::temp_directory_path() / ("sla-tool-window-hotkey-tests-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        Require(std::filesystem::create_directory(root), "tool-window hotkey fixture is uniquely owned");
+        const auto path = root / "tool-window-hotkey.sla";
+        std::string error;
+        ToolWindowHotkeySettings missing{0x20, kToolWindowModifierAlt};
+        Require(LoadToolWindowHotkeySettings(path, missing, error) &&
+            missing == ToolWindowHotkeySettings{} && error.empty(),
+            "missing tool-window hotkey settings use safe defaults without creating a file");
+        Require(SaveToolWindowHotkeySettings(path, settings, error) && error.empty(),
+            "tool-window hotkey settings save atomically");
+        ToolWindowHotkeySettings loaded;
+        Require(LoadToolWindowHotkeySettings(path, loaded, error) && loaded == settings,
+            "tool-window hotkey settings reload across process sessions");
+        {
+            std::ofstream corrupt(path, std::ios::binary | std::ios::trunc);
+            corrupt << "not a valid tool hotkey\n";
+        }
+        Require(!LoadToolWindowHotkeySettings(path, loaded, error) && !error.empty() &&
+            !SaveToolWindowHotkeySettings(path, settings, error),
+            "invalid tool-window hotkey settings are reported and never overwritten");
+        std::ifstream corruptStream(path, std::ios::binary);
+        const std::string corruptBytes{std::istreambuf_iterator<char>(corruptStream), {}};
+        Require(corruptBytes == "not a valid tool hotkey\n",
+            "invalid tool-window hotkey file remains untouched for diagnosis");
+        std::cout << "Tool-window hotkey fixtures: " << root.string() << '\n';
     }
 
     void PersistentFacePreferences()
@@ -3386,6 +3495,153 @@ namespace
         Require(settings.light.enabled && settings.shade.enabled && settings.vignette.enabled && settings.cinema.enabled,
             "master switch can hide the composition without losing category choices");
     }
+
+    void ScreenPlacementLightGeometry()
+    {
+        Scene scene{};
+        for (std::size_t slot = 0; slot < kManualLightCount; ++slot) {
+            scene[slot].placed = true;
+            scene[slot].enabled = slot != 2;
+            scene[slot].intensity = 1.0F;
+        }
+        scene.face.enabled = true;
+        LightSession session;
+        session.SetReady(true);
+        Require(session.Start(session.Get().epoch, scene), "screen-placement count session starts");
+        Require(ActiveManualLightCount(session.Get()) == 2,
+            "screen-placement capacity counts only the three main lights");
+        scene[2].enabled = true;
+        Require(session.Submit(session.Get().epoch, scene) && ActiveManualLightCount(session.Get()) == 3,
+            "screen-placement capacity detects all three main lights as active");
+        Require(!ScreenPlacementMustSwitchOff(false, kManualLightCount) &&
+            !ScreenPlacementMustSwitchOff(true, kManualLightCount - 1) &&
+            ScreenPlacementMustSwitchOff(true, kManualLightCount),
+            "an enabled screen-placement light switches off only when all three main lights are active");
+
+        const LightVector origin{};
+        const LightVector anchor{1000.0F, 0.0F, 0.0F};
+        const auto center = ScreenPlacementPosition(origin, {1, 0, 0}, origin, {1, 0, 0}, anchor,
+            kScreenPlacementDepthDefault);
+        Require(center && std::abs(center->x - (1000.0F - kUnitsPerMetre)) < .01F &&
+            std::abs(center->y) < .001F && std::abs(center->z) < .001F,
+            "center cursor places the light on the fixed subject-facing depth plane");
+        const auto offset = ScreenPlacementPosition(origin, {1, .5F, .25F}, origin, {1, 0, 0}, anchor,
+            kScreenPlacementDepthDefault);
+        Require(offset && std::abs(offset->y / offset->x - .5F) < .001F &&
+            std::abs(offset->z / offset->x - .25F) < .001F,
+            "off-center cursor preserves the camera ray on the placement plane");
+        const auto reversed = ScreenPlacementPosition(origin, {-1, 0, 0}, origin, {-1, 0, 0}, anchor,
+            kScreenPlacementDepthDefault);
+        Require(reversed && std::abs(reversed->x - (1000.0F - kUnitsPerMetre)) < .01F,
+            "a reversed camera convention is oriented toward the subject before placement");
+        const auto left = ScreenPlacementPosition(origin, {1, -.5F, 0}, origin, {1, 0, 0}, anchor,
+            kScreenPlacementDepthDefault);
+        const auto right = ScreenPlacementPosition(origin, {1, .5F, 0}, origin, {1, 0, 0}, anchor,
+            kScreenPlacementDepthDefault);
+        Require(left && right && left->y < 0.0F && right->y > 0.0F &&
+            std::abs(left->y + right->y) < .001F,
+            "left and right cursor rays remain symmetric around the rendered centre ray");
+        Require(!ScreenPlacementPosition(origin, {0, 1, 0}, origin, {1, 0, 0}, anchor,
+                kScreenPlacementDepthDefault) &&
+            !ScreenPlacementPosition(origin, {1, 0, 0}, origin, {}, anchor,
+                kScreenPlacementDepthDefault),
+            "parallel rays and invalid camera directions fail closed");
+        Require(std::abs(kScreenPlacementDepthDefault - 1.0F) < .0001F,
+            "screen placement starts on the established one-metre camera-facing plane");
+        const auto deeper = ScreenPlacementPosition(origin, {1, 0, 0}, origin, {1, 0, 0}, anchor, 2.0F);
+        Require(deeper && std::abs(deeper->x - (1000.0F - 2.0F * kUnitsPerMetre)) < .01F,
+            "distance slider moves the camera-facing plane toward the camera without changing direction");
+        const auto clamped = ScreenPlacementPosition(origin, {1, 0, 0}, origin, {1, 0, 0},
+            {kUnitsPerMetre, 0, 0}, kScreenPlacementDepthMax);
+        Require(clamped && clamped->x > 0.0F && clamped->x < kUnitsPerMetre,
+            "remembered distance cannot cross a closer camera after a scene change");
+        Require(std::abs(ScreenPlacementDistanceAfterWheel(1.0F, 1.0F, false) - 1.03F) < .0001F &&
+            std::abs(ScreenPlacementDistanceAfterWheel(1.0F, -1.0F, false) - .97F) < .0001F,
+            "one wheel notch changes screen-placement distance by 0.03m in either direction");
+        Require(std::abs(ScreenPlacementDistanceAfterWheel(1.0F, 1.0F, true) - 1.20F) < .0001F &&
+            std::abs(ScreenPlacementDistanceAfterWheel(1.0F, -1.0F, true) - .80F) < .0001F,
+            "shift and one wheel notch changes screen-placement distance by 0.20m");
+        Require(ScreenPlacementDistanceAfterWheel(kScreenPlacementDepthMax, 1.0F, false) == kScreenPlacementDepthMax &&
+            ScreenPlacementDistanceAfterWheel(kScreenPlacementDepthMin, -1.0F, true) == kScreenPlacementDepthMin,
+            "screen-placement wheel distance clamps to the agreed 0.25m through 8m limits");
+        Require(ScreenPlacementDistanceAfterWheel(1.0F, std::numeric_limits<float>::quiet_NaN(), false) == 1.0F,
+            "invalid wheel input leaves screen-placement distance unchanged");
+
+        LightSettings source;
+        source.placed = true;
+        source.type = 3;
+        source.intensity = 1.7F;
+        source.range = 6.2F;
+        source.distance = 9.0F;
+        source.heightOffset = .8F;
+        source.castsShadow = true;
+        source.shadowBias = 8.0F;
+        source.shadowProjection = ShadowProjection::Spot;
+        source.fine = {.4F, -.3F, .2F};
+        source.customTint = LightTint{.2F, .4F, .8F};
+        const auto point = ScreenPlacementLightSettings(source);
+        Require(point.placed && point.enabled && point.type == source.type &&
+            point.intensity == source.intensity && point.range == kScreenPlacementRangeDefault &&
+            point.customTint == source.customTint && point.castsShadow,
+            "new screen-placement point light uses 6m while copying color, intensity and shadow toggle");
+        Require(point.shadowProjection == source.shadowProjection &&
+            point.shadowBias == source.shadowBias && point.distance == kScreenPlacementDepthDefault &&
+            point.heightOffset == kLightHeightDefault && !HasFinePosition(point.fine),
+            "screen-placement point light keeps shadow settings but discards 3D offsets");
+        Require(ValidScreenPlacementLightSettings(point),
+            "normalized screen-placement settings are accepted");
+        auto rangeEdited = point;
+        rangeEdited.range = 9.75F;
+        Require(NormalizeScreenPlacementLightSettings(rangeEdited).range == rangeEdited.range,
+            "screen-placement normalization preserves the edited range shown by the UI");
+        auto edited = point;
+        edited.intensity = 3.0F;
+        edited.range = kScreenPlacementRangeMax;
+        edited.distance = 3.75F;
+        edited.shadowProjection = ShadowProjection::Spot;
+        Require(ValidScreenPlacementLightSettings(edited),
+            "screen-placement mini-window accepts its intensity, range and distance limits");
+        edited.intensity = 2.35F;
+        edited.castsShadow = false;
+        edited.customTint = LightTint{.85F, .25F, .10F};
+        const auto resumed = ScreenPlacementLightForBegin(source, edited);
+        Require(resumed == edited,
+            "screen-placement reopening keeps the session's color, power, range and shadow settings");
+        Require(ScreenPlacementLightForBegin(source, std::nullopt) == point,
+            "screen-placement without session memory starts from the selected main light with 6m range");
+        auto invalidRemembered = edited;
+        invalidRemembered.range = kScreenPlacementRangeMax + 1.0F;
+        Require(ScreenPlacementLightForBegin(source, invalidRemembered) == point,
+            "invalid remembered placement settings fail closed to the selected main light");
+        edited.range = kScreenPlacementRangeMax;
+        edited.castsShadow = true;
+        edited.shadowProjection = ShadowProjection::Spot;
+        const CameraBasis placementBasis{{1, 0, 0}, {0, 1, 0}};
+        Require(!AimPlacedSpotlight({0, 0, 0}, {1, 0, 0}, placementBasis, edited) &&
+            AimScreenPlacementSpotlight({0, 0, 0}, {1, 0, 0}, edited),
+            "screen-placement spot aim accepts 20m without passing through the regular 12m validator");
+        edited.range = kScreenPlacementRangeMax + .01F;
+        Require(!ValidScreenPlacementLightSettings(edited),
+            "screen-placement mini-window rejects range above its limit");
+        edited = point;
+        edited.intensity = 3.01F;
+        Require(!ValidScreenPlacementLightSettings(edited),
+            "screen-placement mini-window rejects intensity above its limit");
+        edited = point;
+        edited.customTint = LightTint{1.1F, .5F, .5F};
+        Require(!ValidScreenPlacementLightSettings(edited),
+            "screen-placement mini-window rejects invalid custom colors");
+        edited = point;
+        edited.distance = kScreenPlacementDepthMax + .01F;
+        Require(!ValidScreenPlacementLightSettings(edited),
+            "screen-placement mini-window rejects distance above its limit");
+        ScreenPlacementSettings remembered{true, .25F, .75F, point};
+        Require(ValidScreenPlacementSettings(remembered),
+            "normalized screen position and light settings form a serializable placement state");
+        remembered.normalizedX = 1.01F;
+        Require(!ValidScreenPlacementSettings(remembered),
+            "screen position outside normalized coordinates is rejected");
+    }
 }
 
 int main()
@@ -3432,9 +3688,11 @@ int main()
         LanguagePresentation();
         StorageMigration();
         TargetSelectionAndUniformDiagrams();
+        ToolWindowHotkeyPreferences();
         PersistentFacePreferences();
         PhotoEffectPreferences();
         ScreenOverlayComposition();
+        ScreenPlacementLightGeometry();
         std::cout << "PASS: " << checks << " lighting-state/layout/runtime-model checks\n";
         return 0;
     } catch (const std::exception& error) {

@@ -76,6 +76,17 @@ namespace ScreenshotLightingAssistant
         bool operator==(const LightSettings&) const = default;
     };
 
+    // Value-only screen-placement state. Normalized coordinates survive resolution
+    // changes; engine objects and viewport pixel coordinates never enter presets.
+    struct ScreenPlacementSettings
+    {
+        bool enabled{};
+        float normalizedX{ 0.5F };
+        float normalizedY{ 0.5F };
+        LightSettings light{};
+        bool operator==(const ScreenPlacementSettings&) const = default;
+    };
+
     enum class FaceLightBasis { Camera, Head };
     inline bool ValidFaceBasis(FaceLightBasis basis)
     {

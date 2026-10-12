@@ -18,6 +18,7 @@ namespace ScreenshotLightingAssistant
         Scene scene;
         bool includeFace{};
         std::filesystem::path file;
+        std::optional<ScreenPlacementSettings> screenPlacement;
     };
 
     // No handles, actor identity, camera transform, or master running state on disk.
@@ -31,7 +32,8 @@ namespace ScreenshotLightingAssistant
         explicit PresetLibrary(std::filesystem::path directory) : directory_(std::move(directory)) {}
         void Load();
         bool SaveLight(std::string name, const LightSettings& light);
-        bool SaveScene(std::string name, const Scene& scene, bool includeFace);
+        bool SaveScene(std::string name, const Scene& scene, bool includeFace,
+            std::optional<ScreenPlacementSettings> screenPlacement = std::nullopt);
         bool RenameLight(std::size_t index, std::string name);
         bool RenameScene(std::size_t index, std::string name);
         bool ArchiveLight(std::size_t index);

@@ -1,6 +1,14 @@
-# Screenshot Lighting Assistant 0.3.0
+# Screenshot Lighting Assistant 0.4.0
 
-Three adjustable photography lights, an independent photography face fill, and an optional persistent player face light for Skyrim SE/AE. Version 0.3.0 promotes the validated alpha54 code to a public release without changing its feature implementation.
+Photography lighting for Skyrim SE/AE with three subject-relative lights, a fourth screen-placement light, an independent photography face fill, and an optional persistent player face light.
+
+## Version 0.4.0
+
+- Adds a fourth Free Light placed directly on screen with the mouse. Intensity, range, distance from the subject, colour and shadow mode update live from either the placement window or the main panel.
+- Its normalized screen position and settings survive lighting stop/start, loading and window-size changes, and can be stored in presets. If all three regular lights are enabled, the Free Light safely switches off while retaining its settings.
+- A configurable hotkey, including Shift/Ctrl/Alt combinations, opens a standalone “Screenshot Lighting Assistant” window without the full Mod Control Panel. The title-bar close button and the same hotkey close it, including while powerofthree's Photo Mode/free camera is active.
+- New Free Lights start at a 6.0 m range. During placement, the wheel changes subject distance by 0.03 m and Shift+wheel changes it by 0.20 m.
+- All 0.3.0 features and storage formats remain compatible. The experimental portrait-camera feature is not included.
 
 ## Version 0.3.0
 
@@ -326,7 +334,7 @@ Three adjustable photography lights, an independent photography face fill, and a
 
 ## Install
 
-Close Skyrim. Back up the previous `ScreenshotLightingAssistant` storage folder and keep your previous installer for rollback. Install **ScreenshotLightingAssistant-0.3.0-alpha25-MO2.zip** with MO2; disable the previous DLL. The archive root contains `SKSE/Plugins` and `docs`, with no extra `Data` wrapper. Do not install the separate source or symbols ZIP in MO2.
+Close Skyrim. Back up the previous `ScreenshotLightingAssistant` storage folder and keep your previous installer for rollback. Install **ScreenshotLightingAssistant-0.4.0-MO2.zip** with MO2; disable the previous DLL. The archive root contains `SKSE/Plugins` and `docs`, with no extra `Data` wrapper. Do not install the separate source or symbols ZIP in MO2.
 
 Requires SKSE64, Address Library, SKSE Menu Framework 3, and the Microsoft Visual C++ 2015–2022 Redistributable (x64). This build targets SE/AE, not VR. No ESP, game INI edits or changes to other mods are included.
 

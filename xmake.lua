@@ -1,7 +1,7 @@
 set_xmakever("3.0.0")
 
 local plugin_name = "ScreenshotLightingAssistant"
-local plugin_version = "0.3.0"
+local plugin_version = "0.4.0"
 local commonlib_dir = os.getenv("COMMONLIB_SSE_FOLDER") or "lib/commonlibsse-ng"
 
 set_project(plugin_name)
@@ -73,7 +73,9 @@ target("lighting-state-tests", function()
     add_files("src/Localization.cpp")
     add_files("src/StorageLocation.cpp")
     add_files("src/PersistentFaceSettings.cpp")
+    add_files("src/ToolWindowHotkeySettings.cpp")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
     add_includedirs("src")
+    add_syslinks("user32")
     add_cxxflags("/utf-8", { force = true })
 end)

@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "RuntimeLight.h"
 #include "PhotoEffectMotion.h"
+#include <Windows.h>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -9,6 +10,72 @@ namespace ScreenshotLightingAssistant::RuntimeLight
 {
     namespace
     {
+        using IsPhotoModeActiveFunction = std::uint8_t (*)();
+
+        IsPhotoModeActiveFunction PhotoModeActiveFunction()
+        {
+            static const auto function = []() -> IsPhotoModeActiveFunction {
+                // Current releases use po3_PhotoMode.dll; retain the legacy
+                // spelling so the compatibility path also works with older builds.
+                auto* module = GetModuleHandleW(L"po3_PhotoMode.dll");
+                if (!module) { module = GetModuleHandleW(L"PhotoMode.dll"); }
+                return module ? reinterpret_cast<IsPhotoModeActiveFunction>(
+                    GetProcAddress(module, "IsPhotoModeActive")) : nullptr;
+            }();
+            return function;
+        }
+
+        bool PhotoModeIsActive()
+        {
+            const auto function = PhotoModeActiveFunction();
+            return function && function() != 0;
+        }
+
+        bool GameProcessOwnsForegroundWindow()
+        {
+            const auto window = GetForegroundWindow();
+            if (!window) { return false; }
+            DWORD process{};
+            GetWindowThreadProcessId(window, &process);
+            return process == GetCurrentProcessId();
+        }
+
+        bool AsyncToolWindowKeyDown(std::uint32_t scanCode)
+        {
+            const auto virtualKey = ToolWindowVirtualKeyFromScanCode(scanCode);
+            return virtualKey != 0 &&
+                (GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000) != 0;
+        }
+
+        std::uint8_t AsyncToolWindowModifierMask()
+        {
+            std::uint8_t result{};
+            if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
+                result |= kToolWindowModifierShift;
+            }
+            if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
+                result |= kToolWindowModifierControl;
+            }
+            if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+                result |= kToolWindowModifierAlt;
+            }
+            return result;
+        }
+
+        RE::NiCamera* PlayerWorldCamera(RE::NiNode* cameraRoot)
+        {
+            if (!cameraRoot) { return nullptr; }
+            // Use the NiCamera that renders the current player view. The world
+            // scene graph's camera pointer can temporarily refer to another
+            // render pass, which makes cursor rays disagree with the picture.
+            for (auto& child : cameraRoot->GetChildren()) {
+                if (auto* camera = netimmerse_cast<RE::NiCamera*>(child.get())) {
+                    return camera;
+                }
+            }
+            return nullptr;
+        }
+
         std::string PhotoEffectMeshPath(PhotoEffectType type, int lifetimeVariant,
             bool orbit, int orbitDirection)
         {
@@ -207,9 +274,13 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             std::atomic_bool persistentFaceActive = false;
             std::atomic_bool persistentFaceWaiting = false;
             std::atomic_bool persistentFaceUsesPhotoLight = false;
+            std::atomic_bool screenPlacementActive = false;
+            std::atomic_bool screenPlacementWaiting = false;
             std::atomic_bool ownsEffect = false;
             std::atomic_size_t activePhotoEffectCount = 0;
             std::atomic<std::uint64_t> persistentSaveRevision = 0;
+            std::atomic<std::uint64_t> toolWindowSaveRevision = 0;
+            std::atomic_bool toolWindowToggleRequested = false;
             PersistentFaceSettings persistentFace;
             std::filesystem::path persistentFacePath;
             std::string persistentFaceError;
@@ -217,7 +288,31 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             std::string persistentGamepadHotkeyName = "未設定";
             bool persistentHotkeyCapture = false;
             bool persistentGamepadCapture = false;
+            ToolWindowHotkeySettings toolWindowHotkey;
+            ToolWindowModifierState toolWindowModifiers;
+            std::filesystem::path toolWindowHotkeyPath;
+            std::string toolWindowHotkeyError;
+            std::string toolWindowHotkeyName = "未設定";
+            bool toolWindowHotkeyCapture = false;
+            bool photoModeToolWindowKeyDown = false;
+            bool photoModeToolWindowFallbackActive = false;
             PhotoEffectSettings photoEffect;
+            struct ScreenPlacementRequest
+            {
+                bool enabled{};
+                bool positioning{};
+                bool confirmRequested{};
+                bool settingsRemembered{};
+                bool positionRemembered{};
+                float normalizedX{0.5F};
+                float normalizedY{0.5F};
+                float x{};
+                float y{};
+                float width{1.0F};
+                float height{1.0F};
+                std::uint64_t revision{};
+                LightSettings light{};
+            } screenPlacement;
             PersistentGamepadHoldGate persistentGamepadHold;
             struct TargetCommand {
                 std::uint64_t epoch;
@@ -265,6 +360,8 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             };
             OwnedParticleField particleField;
             std::optional<CameraBasis> basis;
+            std::optional<LightVector> screenPlacementWorldPosition;
+            std::uint64_t appliedScreenPlacementRevision{};
             std::uint64_t appliedEpoch = 0;
             std::uint64_t appliedAlignment = 0;
             RE::FormID cellID = 0;
@@ -295,8 +392,25 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 result.persistentGamepadCapture = persistentGamepadCapture;
                 result.persistentGamepadHotkeyName = persistentGamepadHotkeyName;
                 result.persistentFaceError = persistentFaceError;
+                result.toolWindowHotkey = toolWindowHotkey;
+                result.toolWindowHotkeyCapture = toolWindowHotkeyCapture;
+                result.toolWindowHotkeyName = toolWindowHotkeyName;
+                result.toolWindowHotkeyError = toolWindowHotkeyError;
                 result.photoEffect = photoEffect;
                 result.activePhotoEffects = activePhotoEffectCount.load();
+                result.screenPlacement.enabled = screenPlacement.enabled;
+                result.screenPlacement.positioning = screenPlacement.positioning;
+                result.screenPlacement.active = screenPlacementActive.load();
+                result.screenPlacement.waiting = screenPlacementWaiting.load();
+                result.screenPlacement.settingsRemembered = screenPlacement.settingsRemembered;
+                result.screenPlacement.positionRemembered = screenPlacement.positionRemembered;
+                result.screenPlacement.normalizedX = screenPlacement.normalizedX;
+                result.screenPlacement.normalizedY = screenPlacement.normalizedY;
+                result.screenPlacement.x = screenPlacement.x;
+                result.screenPlacement.y = screenPlacement.y;
+                result.screenPlacement.width = screenPlacement.width;
+                result.screenPlacement.height = screenPlacement.height;
+                result.screenPlacement.light = screenPlacement.light;
                 return result;
             }
             LightSessionSnapshot Request()
@@ -313,6 +427,11 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             {
                 std::scoped_lock lock(mutex);
                 return photoEffect;
+            }
+            ScreenPlacementRequest ScreenPlacementRequestCopy()
+            {
+                std::scoped_lock lock(mutex);
+                return screenPlacement;
             }
             bool PersistentRequested()
             {
@@ -368,6 +487,9 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 persistentFaceActive.store(false);
                 persistentFaceWaiting.store(false);
                 persistentFaceUsesPhotoLight.store(false);
+                screenPlacementActive.store(false);
+                screenPlacementWaiting.store(false);
+                screenPlacementWorldPosition.reset();
             }
 
             void ClearEffects()
@@ -578,6 +700,17 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 return std::format("Keyboard 0x{:02X}", code);
             }
 
+            std::string ResolveToolWindowHotkeyName(const ToolWindowHotkeySettings& settings)
+            {
+                if (settings.key == kNoToolWindowHotkey) { return "未設定"; }
+                std::string result;
+                if (settings.modifiers & kToolWindowModifierControl) { result += "Ctrl + "; }
+                if (settings.modifiers & kToolWindowModifierShift) { result += "Shift + "; }
+                if (settings.modifiers & kToolWindowModifierAlt) { result += "Alt + "; }
+                result += ResolveHotkeyName(RE::INPUT_DEVICE::kKeyboard, settings.key);
+                return result;
+            }
+
             void SavePersistentConfiguration()
             {
                 PersistentFaceSettings settings;
@@ -594,6 +727,24 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     persistentFaceError = std::move(error);
                 }
                 if (!saved) { logger::warn("Persistent face-light preference was not saved"); }
+            }
+
+            void SaveToolWindowHotkeyConfiguration()
+            {
+                ToolWindowHotkeySettings settings;
+                std::filesystem::path path;
+                {
+                    std::scoped_lock lock(mutex);
+                    settings = toolWindowHotkey;
+                    path = toolWindowHotkeyPath;
+                }
+                std::string error;
+                const bool saved = SaveToolWindowHotkeySettings(path, settings, error);
+                {
+                    std::scoped_lock lock(mutex);
+                    toolWindowHotkeyError = std::move(error);
+                }
+                if (!saved) { logger::warn("Tool-window hotkey preference was not saved"); }
             }
 
             static LightVector Vec(const RE::NiPoint3& p) { return { p.x, p.y, p.z }; }
@@ -754,6 +905,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 const auto request = Request();
                 const auto persistent = PersistentRequest();
                 const auto effectSettings = EffectRequest();
+                auto screenRequest = ScreenPlacementRequestCopy();
                 const bool persistentRequested = persistent.featureEnabled && persistent.enabled;
                 if (request.epoch != appliedEpoch) {
                     Clear();
@@ -761,6 +913,10 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     cellID = 0;
                     playerCellID = 0;
                     appliedEpoch = request.epoch;
+                }
+                if (screenRequest.revision != appliedScreenPlacementRevision) {
+                    screenPlacementWorldPosition.reset();
+                    appliedScreenPlacementRevision = screenRequest.revision;
                 }
                 if (!request.ready || request.blocked) {
                     Clear();
@@ -846,6 +1002,40 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                             positionFallback ? "position+1.2m" : headFallback ? "head" : "chest", cellID);
                     }
                 }
+                if (request.running && screenRequest.enabled) {
+                    auto* worldCamera = PlayerWorldCamera(cameraRoot.get());
+                    RE::NiPoint3 rayOrigin{};
+                    RE::NiPoint3 rayDirection{};
+                    RE::NiPoint3 centreRayOrigin{};
+                    RE::NiPoint3 centreRayDirection{};
+                    const bool validViewport = std::isfinite(screenRequest.x) && std::isfinite(screenRequest.y) &&
+                        std::isfinite(screenRequest.width) && std::isfinite(screenRequest.height) &&
+                        screenRequest.width >= 2.0F && screenRequest.height >= 2.0F;
+                    const bool rayReady = validViewport && worldCamera &&
+                        worldCamera->WindowPointToRay(
+                        static_cast<std::int32_t>(std::lround(screenRequest.x)),
+                        static_cast<std::int32_t>(std::lround(screenRequest.y)), rayOrigin, rayDirection,
+                        screenRequest.width, screenRequest.height) &&
+                        worldCamera->WindowPointToRay(
+                        static_cast<std::int32_t>(std::lround(screenRequest.width * 0.5F)),
+                        static_cast<std::int32_t>(std::lround(screenRequest.height * 0.5F)),
+                        centreRayOrigin, centreRayDirection, screenRequest.width, screenRequest.height);
+                    if (rayReady) {
+                        screenPlacementWorldPosition = ScreenPlacementPosition(Vec(rayOrigin), Vec(rayDirection),
+                            Vec(centreRayOrigin), Vec(centreRayDirection), anchor,
+                            screenRequest.light.distance);
+                    } else {
+                        screenPlacementWorldPosition.reset();
+                    }
+                    if (screenRequest.confirmRequested) {
+                        std::scoped_lock lock(mutex);
+                        if (screenPlacement.revision == screenRequest.revision) {
+                            screenPlacement.positioning = false;
+                            screenPlacement.confirmRequested = false;
+                            screenRequest = screenPlacement;
+                        }
+                    }
+                }
                 if (request.running) { UpdateEffects(effectSettings, cell, anchor, *basis); }
                 else { ClearEffects(); }
                 // Hold the scene even with all slots OFF; scene replacement must still disarm.
@@ -877,7 +1067,27 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     }
                 }
 
+                const std::size_t manualActive = ActiveManualLightCount(request);
+                if (ScreenPlacementMustSwitchOff(screenRequest.enabled, manualActive)) {
+                    bool switchedOff = false;
+                    {
+                        std::scoped_lock lock(mutex);
+                        if (screenPlacement.revision == screenRequest.revision && screenPlacement.enabled) {
+                            screenPlacement.enabled = false;
+                            screenPlacement.positioning = false;
+                            screenPlacement.confirmRequested = false;
+                            ++screenPlacement.revision;
+                            screenRequest = screenPlacement;
+                            switchedOff = true;
+                        }
+                    }
+                    if (switchedOff) {
+                        screenPlacementWaiting.store(false);
+                        logger::info("Screen-placement light switched off because all three regular lights are active; settings retained");
+                    }
+                }
                 const auto settingsFor = [&](std::size_t slot) -> std::optional<LightSettings> {
+                    if (slot == kScreenPlacementRuntimeSlot) { return screenRequest.light; }
                     if (slot != kPersistentFaceRuntimeSlot) { return RuntimeSettings(request.lights, slot); }
                     LightSettings light;
                     light.placed = true;
@@ -890,6 +1100,10 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     return light;
                 };
                 const auto wantsSlot = [&](std::size_t slot) {
+                    if (slot == kScreenPlacementRuntimeSlot) {
+                        return request.running && screenRequest.enabled && manualActive < kManualLightCount &&
+                            screenPlacementWorldPosition.has_value();
+                    }
                     if (slot == kPersistentFaceRuntimeSlot) {
                         return persistentRequested && persistent.intensity > 0.0F && !photoFaceOwnsPlayer &&
                             persistentFacePosition.has_value();
@@ -924,14 +1138,20 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     }
                     auto& owned = lights[slot];
                     const auto position = slot == kPersistentFaceRuntimeSlot ? persistentFacePosition :
-                        slot == kFaceRuntimeSlot ? facePosition : LightPosition(anchor, *basis, light);
+                        slot == kFaceRuntimeSlot ? facePosition :
+                        slot == kScreenPlacementRuntimeSlot ? screenPlacementWorldPosition :
+                        LightPosition(anchor, *basis, light);
                     if (!position) {
                         if (request.running) { Halt(request.epoch, "配置座標が無効なため停止しました。"); }
                         return;
                     }
                     if (!Current(request.epoch)) { Clear(); return; }
                     const auto desiredSettings = LightRegistrationSettings::From(light);
-                    const auto aim = desiredSettings.spot ? AimPlacedSpotlight(*position, anchor, *basis, light) : std::optional<SpotlightBasis>{};
+                    const auto aim = desiredSettings.spot ?
+                        slot == kScreenPlacementRuntimeSlot ?
+                            AimScreenPlacementSpotlight(*position, anchor, light) :
+                            AimPlacedSpotlight(*position, anchor, *basis, light) :
+                        std::optional<SpotlightBasis>{};
                     if (desiredSettings.spot && !aim) {
                         Halt(request.epoch, "スポットの向きを計算できないため停止しました。");
                         return;
@@ -944,6 +1164,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                         }
                         owned.point->name = RE::BSFixedString(slot == kFaceRuntimeSlot ? "ScreenshotLightingAssistant:Face" :
                             slot == kPersistentFaceRuntimeSlot ? "ScreenshotLightingAssistant:PersistentFace" :
+                            slot == kScreenPlacementRuntimeSlot ? "ScreenshotLightingAssistant:ScreenPlacement" :
                             std::format("ScreenshotLightingAssistant:Light{}", slot + 1));
                         // Deliberately NOT attached to actor/cell 3D and NOT a TESObjectREFR.
                         // The manager owns this transient light; only the renderer registers it.
@@ -1010,13 +1231,17 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                             light.distance, light.heightOffset);
                     }
                     if (!Current(request.epoch)) { Clear(); return; }
-                    if (slot < kManualLightCount) { ++active; }
+                    if (slot < kManualLightCount || slot == kScreenPlacementRuntimeSlot) { ++active; }
                     if (desiredSettings.shadow) { ++shadowed; }
                 }
                 if (!Current(request.epoch)) { Clear(); return; }
                 const bool faceActive = static_cast<bool>(lights[kFaceRuntimeSlot].registration);
                 const bool persistentActive = photoFaceOwnsPlayer ? faceActive :
                     static_cast<bool>(lights[kPersistentFaceRuntimeSlot].registration);
+                const bool placedScreenActive = static_cast<bool>(lights[kScreenPlacementRuntimeSlot].registration);
+                screenPlacementActive.store(placedScreenActive);
+                screenPlacementWaiting.store(screenRequest.enabled && request.running && !placedScreenActive &&
+                    manualActive >= kManualLightCount);
                 SetPersistentState(persistentActive,
                     persistentRequested && persistent.intensity > 0.0F && !persistentActive,
                     photoFaceOwnsPlayer);
@@ -1048,6 +1273,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                         std::scoped_lock lock(mutex);
                         if (event->menuName == RE::MainMenu::MENU_NAME) { mainMenu = event->opening; }
                         else { loadingMenu = event->opening; }
+                        if (event->opening) { toolWindowModifiers.Reset(); }
                         session.Block(mainMenu || loadingMenu);
                         if (event->opening) { ResetTargetView(); }
                         status = "画面遷移で停止しました。自動再点灯はしません。";
@@ -1069,10 +1295,13 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     const auto code = button->GetIDCode();
 
                     if (device == RE::INPUT_DEVICE::kKeyboard) {
-                        if (!button->IsDown()) { continue; }
-                        if (CapturePersistentHotkey(code)) {
+                        if (button->IsDown() && CapturePersistentHotkey(code)) {
                             return RE::BSEventNotifyControl::kContinue;
                         }
+                        if (HandleToolWindowKeyboardEvent(code, button->IsPressed(), button->IsDown())) {
+                            continue;
+                        }
+                        if (!button->IsDown()) { continue; }
                         bool changed{};
                         {
                             std::scoped_lock lock(mutex);
@@ -1139,6 +1368,7 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                 RE::INPUT_DEVICE::kKeyboard, runtime.persistentFace.hotkey);
             runtime.persistentGamepadHotkeyName = runtime.ResolveHotkeyName(
                 RE::INPUT_DEVICE::kGamepad, runtime.persistentFace.gamepadHotkey);
+            runtime.toolWindowHotkeyName = runtime.ResolveToolWindowHotkeyName(runtime.toolWindowHotkey);
         } else {
             logger::warn("Input manager unavailable; persistent face-light hotkeys were not registered");
         }
@@ -1150,6 +1380,9 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             auto observedSaveRevision = rt.persistentSaveRevision.load();
             auto savedRevision = observedSaveRevision;
             auto persistentChangedAt = std::chrono::steady_clock::now();
+            auto observedToolWindowRevision = rt.toolWindowSaveRevision.load();
+            auto savedToolWindowRevision = observedToolWindowRevision;
+            auto toolWindowChangedAt = std::chrono::steady_clock::now();
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(33));
                 const auto revision = rt.persistentSaveRevision.load();
@@ -1163,6 +1396,16 @@ namespace ScreenshotLightingAssistant::RuntimeLight
                     std::chrono::steady_clock::now() - persistentChangedAt >= std::chrono::milliseconds(250)) {
                     rt.SavePersistentConfiguration();
                     savedRevision = revision;
+                }
+                const auto toolWindowRevision = rt.toolWindowSaveRevision.load();
+                if (toolWindowRevision != observedToolWindowRevision) {
+                    observedToolWindowRevision = toolWindowRevision;
+                    toolWindowChangedAt = std::chrono::steady_clock::now();
+                }
+                if (toolWindowRevision != savedToolWindowRevision &&
+                    std::chrono::steady_clock::now() - toolWindowChangedAt >= std::chrono::milliseconds(250)) {
+                    rt.SaveToolWindowHotkeyConfiguration();
+                    savedToolWindowRevision = toolWindowRevision;
                 }
                 if (!rt.dirty.load() && !rt.ownsLight.load() && !rt.ownsEffect.load() &&
                     !rt.Request().running && !rt.PersistentRequested()) { continue; }
@@ -1201,12 +1444,31 @@ namespace ScreenshotLightingAssistant::RuntimeLight
         logger::info("Persistent face-light settings: {}", loaded ? "loaded/defaulted" : "invalid file preserved");
     }
 
+    void ConfigureToolWindowHotkeyStorage(const std::filesystem::path& path)
+    {
+        auto& runtime = Runtime::Get();
+        ToolWindowHotkeySettings settings;
+        std::string error;
+        const bool loaded = LoadToolWindowHotkeySettings(path, settings, error);
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.toolWindowHotkeyPath = path;
+            if (loaded) { runtime.toolWindowHotkey = settings; }
+            runtime.toolWindowHotkeyError = std::move(error);
+            runtime.toolWindowHotkeyName = runtime.ResolveToolWindowHotkeyName(runtime.toolWindowHotkey);
+        }
+        logger::info("Tool-window hotkey settings: {}", loaded ? "loaded/defaulted" : "invalid file preserved");
+    }
+
     void SetGameReady(bool ready)
     {
         auto& runtime = Runtime::Get();
         {
             std::scoped_lock lock(runtime.mutex);
             runtime.session.SetReady(ready);
+            runtime.screenPlacement.positioning = false;
+            runtime.screenPlacement.confirmRequested = false;
+            ++runtime.screenPlacement.revision;
             runtime.ResetTargetView();
             runtime.status = ready ? "停止中 : 撮影場所で撮影ライトを開始してください。" : "ロード待機中 : 実ライトを停止しています。";
             runtime.statusImportant = !ready;
@@ -1245,6 +1507,9 @@ namespace ScreenshotLightingAssistant::RuntimeLight
         {
             std::scoped_lock lock(runtime.mutex);
             if (!runtime.session.Stop(epoch)) { return; }
+            runtime.screenPlacement.positioning = false;
+            runtime.screenPlacement.confirmRequested = false;
+            ++runtime.screenPlacement.revision;
             runtime.status = "停止処理待ち : 設定・履歴は保持されています。";
             runtime.statusImportant = false;
         }
@@ -1284,6 +1549,229 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             if (runtime.photoEffect == settings) { return; }
             runtime.photoEffect = settings;
         }
+        runtime.dirty.store(true);
+    }
+
+    bool BeginScreenPlacement(const LightSettings& settings)
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            const auto& session = runtime.session.Get();
+            if (!session.ready || session.blocked || !session.running ||
+                ActiveManualLightCount(session) >= kManualLightCount) {
+                return false;
+            }
+            const auto light = ScreenPlacementLightForBegin(settings,
+                runtime.screenPlacement.settingsRemembered ?
+                    std::optional(runtime.screenPlacement.light) : std::nullopt);
+            if (!ValidScreenPlacementLightSettings(light)) { return false; }
+            runtime.screenPlacement.enabled = true;
+            runtime.screenPlacement.positioning = true;
+            runtime.screenPlacement.confirmRequested = false;
+            runtime.screenPlacement.settingsRemembered = true;
+            if (!runtime.screenPlacement.positionRemembered) {
+                runtime.screenPlacement.normalizedX = 0.5F;
+                runtime.screenPlacement.normalizedY = 0.5F;
+            }
+            runtime.screenPlacement.light = light;
+            ++runtime.screenPlacement.revision;
+        }
+        runtime.screenPlacementActive.store(false);
+        runtime.screenPlacementWaiting.store(false);
+        runtime.dirty.store(true);
+        return true;
+    }
+
+    void UpdateScreenPlacement(float x, float y, float width, float height)
+    {
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||
+            width < 2.0F || height < 2.0F) {
+            return;
+        }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.enabled || !runtime.screenPlacement.positioning) { return; }
+            runtime.screenPlacement.x = std::clamp(x, 0.0F, width - 1.0F);
+            runtime.screenPlacement.y = std::clamp(y, 0.0F, height - 1.0F);
+            runtime.screenPlacement.width = width;
+            runtime.screenPlacement.height = height;
+            runtime.screenPlacement.normalizedX = runtime.screenPlacement.x / (width - 1.0F);
+            runtime.screenPlacement.normalizedY = runtime.screenPlacement.y / (height - 1.0F);
+            runtime.screenPlacement.positionRemembered = true;
+        }
+        runtime.dirty.store(true);
+    }
+
+    void SyncScreenPlacementViewport(float width, float height)
+    {
+        if (!std::isfinite(width) || !std::isfinite(height) || width < 2.0F || height < 2.0F) {
+            return;
+        }
+        auto& runtime = Runtime::Get();
+        bool changed = false;
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.settingsRemembered ||
+                !runtime.screenPlacement.positionRemembered) {
+                return;
+            }
+            const float x = runtime.screenPlacement.normalizedX * (width - 1.0F);
+            const float y = runtime.screenPlacement.normalizedY * (height - 1.0F);
+            changed = runtime.screenPlacement.x != x || runtime.screenPlacement.y != y ||
+                runtime.screenPlacement.width != width || runtime.screenPlacement.height != height;
+            if (!changed) { return; }
+            runtime.screenPlacement.x = x;
+            runtime.screenPlacement.y = y;
+            runtime.screenPlacement.width = width;
+            runtime.screenPlacement.height = height;
+        }
+        runtime.dirty.store(true);
+    }
+
+    void AdjustScreenPlacementDistance(float wheel, bool fast)
+    {
+        if (!std::isfinite(wheel) || wheel == 0.0F) { return; }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.enabled || !runtime.screenPlacement.positioning) { return; }
+            const float adjusted = ScreenPlacementDistanceAfterWheel(
+                runtime.screenPlacement.light.distance, wheel, fast);
+            if (adjusted == runtime.screenPlacement.light.distance) { return; }
+            runtime.screenPlacement.light.distance = adjusted;
+        }
+        // The worker pump owns the NiPointLight mutation. UI input only updates
+        // the value request and wakes that existing game-thread path.
+        runtime.dirty.store(true);
+    }
+
+    void SetScreenPlacementSettings(const LightSettings& settings)
+    {
+        const auto normalized = NormalizeScreenPlacementLightSettings(settings);
+        if (!ValidScreenPlacementLightSettings(normalized)) { return; }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.settingsRemembered ||
+                runtime.screenPlacement.light == normalized) {
+                return;
+            }
+            runtime.screenPlacement.light = normalized;
+        }
+        // The existing worker/game-thread pump applies the value snapshot to the
+        // owned NiPointLight. The menu callback never mutates the scene graph.
+        runtime.dirty.store(true);
+    }
+
+    bool SetScreenPlacementEnabled(bool enabled)
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.settingsRemembered ||
+                !runtime.screenPlacement.positionRemembered) {
+                return false;
+            }
+            const auto& session = runtime.session.Get();
+            if (enabled && session.running && ActiveManualLightCount(session) >= kManualLightCount) {
+                return false;
+            }
+            if (runtime.screenPlacement.enabled == enabled &&
+                !runtime.screenPlacement.positioning) {
+                return true;
+            }
+            runtime.screenPlacement.enabled = enabled;
+            runtime.screenPlacement.positioning = false;
+            runtime.screenPlacement.confirmRequested = false;
+            ++runtime.screenPlacement.revision;
+        }
+        runtime.screenPlacementActive.store(false);
+        runtime.screenPlacementWaiting.store(false);
+        runtime.dirty.store(true);
+        return true;
+    }
+
+    void RemoveScreenPlacement()
+    {
+        ApplyScreenPlacementPreset(std::nullopt);
+    }
+
+    void ConfirmScreenPlacement()
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.enabled || !runtime.screenPlacement.positioning) { return; }
+            runtime.screenPlacement.confirmRequested = true;
+        }
+        runtime.dirty.store(true);
+    }
+
+    void DisableScreenPlacement()
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!runtime.screenPlacement.enabled && !runtime.screenPlacement.positioning) { return; }
+            runtime.screenPlacement.enabled = false;
+            runtime.screenPlacement.positioning = false;
+            runtime.screenPlacement.confirmRequested = false;
+            ++runtime.screenPlacement.revision;
+        }
+        runtime.screenPlacementActive.store(false);
+        runtime.screenPlacementWaiting.store(false);
+        runtime.dirty.store(true);
+    }
+
+    std::optional<ScreenPlacementSettings> GetScreenPlacementPreset()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        if (!runtime.screenPlacement.settingsRemembered ||
+            !runtime.screenPlacement.positionRemembered) {
+            return std::nullopt;
+        }
+        ScreenPlacementSettings settings;
+        settings.enabled = runtime.screenPlacement.enabled;
+        settings.normalizedX = runtime.screenPlacement.normalizedX;
+        settings.normalizedY = runtime.screenPlacement.normalizedY;
+        settings.light = runtime.screenPlacement.light;
+        return ValidScreenPlacementSettings(settings) ? std::optional{settings} : std::nullopt;
+    }
+
+    void ApplyScreenPlacementPreset(const std::optional<ScreenPlacementSettings>& settings)
+    {
+        if (settings && !ValidScreenPlacementSettings(*settings)) { return; }
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.screenPlacement.positioning = false;
+            runtime.screenPlacement.confirmRequested = false;
+            if (settings) {
+                runtime.screenPlacement.enabled = settings->enabled;
+                runtime.screenPlacement.settingsRemembered = true;
+                runtime.screenPlacement.positionRemembered = true;
+                runtime.screenPlacement.normalizedX = settings->normalizedX;
+                runtime.screenPlacement.normalizedY = settings->normalizedY;
+                runtime.screenPlacement.x = settings->normalizedX *
+                    std::max(0.0F, runtime.screenPlacement.width - 1.0F);
+                runtime.screenPlacement.y = settings->normalizedY *
+                    std::max(0.0F, runtime.screenPlacement.height - 1.0F);
+                runtime.screenPlacement.light = settings->light;
+            } else {
+                runtime.screenPlacement.enabled = false;
+                runtime.screenPlacement.settingsRemembered = false;
+                runtime.screenPlacement.positionRemembered = false;
+                runtime.screenPlacement.normalizedX = 0.5F;
+                runtime.screenPlacement.normalizedY = 0.5F;
+                runtime.screenPlacement.light = {};
+            }
+            ++runtime.screenPlacement.revision;
+        }
+        runtime.screenPlacementActive.store(false);
+        runtime.screenPlacementWaiting.store(false);
         runtime.dirty.store(true);
     }
 
@@ -1400,5 +1888,132 @@ namespace ScreenshotLightingAssistant::RuntimeLight
             runtime.dirty.store(true);
         }
         return true;
+    }
+
+    void BeginToolWindowHotkeyCapture()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        runtime.toolWindowHotkeyCapture = true;
+        runtime.toolWindowModifiers.Reset();
+        runtime.persistentHotkeyCapture = false;
+        runtime.persistentGamepadCapture = false;
+    }
+
+    void CancelToolWindowHotkeyCapture()
+    {
+        auto& runtime = Runtime::Get();
+        std::scoped_lock lock(runtime.mutex);
+        runtime.toolWindowHotkeyCapture = false;
+        runtime.toolWindowModifiers.Reset();
+    }
+
+    void ClearToolWindowHotkey()
+    {
+        auto& runtime = Runtime::Get();
+        {
+            std::scoped_lock lock(runtime.mutex);
+            runtime.toolWindowHotkeyCapture = false;
+            runtime.toolWindowModifiers.Reset();
+            runtime.toolWindowHotkey = {};
+            runtime.toolWindowHotkeyName = "未設定";
+        }
+        runtime.toolWindowSaveRevision.fetch_add(1);
+    }
+
+    bool HandleToolWindowKeyboardEvent(std::uint32_t code, bool pressed, bool initialDown)
+    {
+        auto& runtime = Runtime::Get();
+        bool save{};
+        bool toggle{};
+        bool consumed{};
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (runtime.toolWindowModifiers.Update(code, pressed)) {
+                return runtime.toolWindowHotkeyCapture;
+            }
+            if (runtime.toolWindowHotkeyCapture) {
+                consumed = true;
+                if (!initialDown) { return true; }
+                if (code == static_cast<std::uint32_t>(RE::BSKeyboardDevice::Key::kEscape)) {
+                    runtime.toolWindowHotkeyCapture = false;
+                    runtime.toolWindowModifiers.Reset();
+                    return true;
+                }
+                ToolWindowHotkeySettings candidate{code, runtime.toolWindowModifiers.Mask()};
+                if (code != kNoToolWindowHotkey && ValidToolWindowHotkeySettings(candidate)) {
+                    runtime.toolWindowHotkey = candidate;
+                    runtime.toolWindowHotkeyName = runtime.ResolveToolWindowHotkeyName(candidate);
+                    runtime.toolWindowHotkeyCapture = false;
+                    runtime.toolWindowModifiers.Reset();
+                    save = true;
+                }
+            } else if (ToolWindowHotkeyMatches(runtime.toolWindowHotkey, code,
+                    runtime.toolWindowModifiers.Mask(), initialDown)) {
+                const auto state = runtime.session.Get();
+                auto* ui = RE::UI::GetSingleton();
+                if (state.ready && !state.blocked && !runtime.mainMenu && !runtime.loadingMenu && ui &&
+                    !ui->IsMenuOpen(RE::Console::MENU_NAME)) {
+                    toggle = true;
+                    consumed = true;
+                }
+            }
+        }
+        if (save) { runtime.toolWindowSaveRevision.fetch_add(1); }
+        if (toggle) { runtime.toolWindowToggleRequested.store(true); }
+        return consumed;
+    }
+
+    void PollPhotoModeToolWindowHotkey()
+    {
+        auto& runtime = Runtime::Get();
+        const bool photoModeActive = PhotoModeIsActive();
+        ToolWindowHotkeySettings settings;
+        bool capture{};
+        {
+            std::scoped_lock lock(runtime.mutex);
+            if (!photoModeActive) {
+                if (runtime.photoModeToolWindowFallbackActive) {
+                    // Photo Mode can swallow modifier-release events while an
+                    // ImGui item is active. Never carry that stale state back to
+                    // the normal event-driven input path.
+                    runtime.toolWindowModifiers.Reset();
+                }
+                runtime.photoModeToolWindowFallbackActive = false;
+                runtime.photoModeToolWindowKeyDown = false;
+                return;
+            }
+            runtime.photoModeToolWindowFallbackActive = true;
+            settings = runtime.toolWindowHotkey;
+            capture = runtime.toolWindowHotkeyCapture;
+        }
+
+        const bool foreground = GameProcessOwnsForegroundWindow();
+        const bool valid = ValidToolWindowHotkeySettings(settings) &&
+            settings.key != kNoToolWindowHotkey;
+        const bool keyDown = foreground && valid && AsyncToolWindowKeyDown(settings.key);
+        const auto modifiers = foreground ? AsyncToolWindowModifierMask() : 0;
+        bool toggle{};
+        {
+            std::scoped_lock lock(runtime.mutex);
+            const bool initialDown = keyDown && !runtime.photoModeToolWindowKeyDown;
+            runtime.photoModeToolWindowKeyDown = keyDown;
+            if (capture || !ToolWindowHotkeyMatches(runtime.toolWindowHotkey,
+                    settings.key, modifiers, initialDown)) {
+                return;
+            }
+            const auto state = runtime.session.Get();
+            auto* ui = RE::UI::GetSingleton();
+            if (state.ready && !state.blocked && !runtime.mainMenu && !runtime.loadingMenu && ui &&
+                !ui->IsMenuOpen(RE::Console::MENU_NAME)) {
+                toggle = true;
+            }
+        }
+        if (toggle) { runtime.toolWindowToggleRequested.store(true); }
+    }
+
+    bool ConsumeToolWindowToggleRequest()
+    {
+        return Runtime::Get().toolWindowToggleRequested.exchange(false);
     }
 }

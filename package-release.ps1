@@ -2,8 +2,8 @@ $ErrorActionPreference = 'Stop'
 
 $project = $PSScriptRoot
 $out = Join-Path $project 'outputs'
-$version = '0.3.0'
-$releaseLabel = 'ScreenshotLightingAssistant-0.3.0'
+$version = '0.4.0'
+$releaseLabel = 'ScreenshotLightingAssistant-0.4.0'
 
 $installStage = Join-Path $out ($releaseLabel + '-MO2')
 $sourceStage = Join-Path $out ($releaseLabel + '-source')
@@ -20,7 +20,7 @@ foreach ($path in @($installStage, $sourceStage, $symbolsStage, $installZip, $so
 
 $dll = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.dll')
 $pdb = Join-Path $project ('build/artifacts/' + $version + '/ScreenshotLightingAssistant.pdb')
-if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.3.0.0') {
+if ((Get-Item -LiteralPath $dll).VersionInfo.FileVersion -ne '0.4.0.0') {
     throw 'Wrong DLL version'
 }
 
